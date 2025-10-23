@@ -9,7 +9,6 @@ from scincl.utils import load_artifacts, create_artifacts
 
 
 def ingest_data(args):
-    """Ingest data using SciNCL methodology."""
     print("Starting SciNCL data ingestion...")
 
     try:
@@ -29,8 +28,7 @@ def ingest_data(args):
             print(f"Removing existing artifacts from {args.output_dir}...")
             shutil.rmtree(args.output_dir)
 
-        # Create new artifacts
-        retrieval, documents = create_artifacts(
+        create_artifacts(
             model_name=args.model,
             index_type=args.index_type,
             artifacts_dir=args.output_dir,
@@ -44,16 +42,13 @@ def ingest_data(args):
 
 
 def query_system(args):
-    """Query the retrieval system."""
     print(f"Loading artifacts from {args.artifacts_dir}...")
 
     try:
-        # Load artifacts using shared utility
         retrieval, documents = load_artifacts(artifacts_dir=args.artifacts_dir)
 
         print(f"System ready with {len(documents)} documents")
 
-        # Perform query
         results = retrieval.retrieve_similar_documents(args.query, k=args.k)
 
         print(f"\nRetrieved {len(results)} documents:")
@@ -61,11 +56,10 @@ def query_system(args):
 
         for i, result in enumerate(results, 1):
             doc = result["document"]
-            print(f"\n{i}. {doc.get('title', 'No title')}...")
+            print(f"\n{i}. {doc.get('title', 'No title')}")
             print(f"   Score: {result['score']:.3f}")
             print(f"   Source: {doc.get('source', 'unknown')}")
-            print(f"   Abstract: {str(doc.get('abstract', 'No abstract'))}...")
-
+            print(f"   Abstract: {str(doc.get('abstract', 'No abstract'))}")
 
     except Exception as e:
         print(f"Error loading artifacts: {e}")
@@ -73,7 +67,6 @@ def query_system(args):
 
 
 def main():
-    """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="SciNCL-based RAG system")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

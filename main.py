@@ -1,132 +1,161 @@
 """
 Main RAG system application.
-Integrates SciNCL methodology for scientific document retrieval.
 """
 
-from scincl import load_artifacts, create_artifacts
+import textwrap
+from scincl import SciNCLRetrieval, load_artifacts, create_artifacts
 
 
-def interactive_query(retrieval):
-    """Interactive query interface for the RAG system."""
+def interactive_query(retrieval: SciNCLRetrieval):
+    """Enhanced interactive query interface with improved formatting."""
     print("\n" + "=" * 60)
     print("SciNCL RAG System - Interactive Mode")
     print("=" * 60)
-    print("Enter your queries below. Type 'quit' to exit.")
-    print("Commands:")
-    print("  - Type any question to search")
-    print("  - Type 'quit' or 'exit' to stop")
-    print("  - Type 'help' for more information")
+    print("💡 Enter your queries below. Type 'quit' to exit or 'help' for info.")
     print("=" * 60)
+
+    help_text = (
+        "\n📋 Available commands:\n"
+        "  🔍 Type any question to search the document collection\n"
+        "  🚪 'quit' or 'exit' to stop the program\n"
+        "  ❓ 'help' to show this help message\n"
+        "  📊 'stats' to show system statistics\n"
+    )
 
     while True:
         try:
-            query = input("\nQuery: ").strip()
+            query = input("\n🔍 Query: ").strip()
 
             if query.lower() in ["quit", "exit"]:
-                print("Goodbye!")
+                print("\n👋 Goodbye!")
                 break
-            elif query.lower() == "help":
-                print("\nAvailable commands:")
-                print("  - Enter any question to search the document collection")
-                print("  - 'quit' or 'exit' to stop the program")
-                print("  - 'help' to show this help message")
+            if query.lower() == "help":
+                print(help_text)
                 continue
-            elif not query:
-                print("Please enter a query.")
+            if query.lower() == "stats":
+                print("\n📊 System Statistics:")
+                print(f"   📚 Total documents: {len(retrieval.documents)}")
+                print("   🔍 Index type: FAISS")
+                print("   🤖 Model: SciNCL")
+                continue
+            if not query:
+                print("⚠️  Please enter a query.")
                 continue
 
-            print(f"\nSearching for: '{query}'")
-            print("-" * 40)
+            print(f"\n🔍 Searching for: '{query}'")
+            print("⏳ Processing...")
 
-            # Perform search
             results = retrieval.retrieve_similar_documents(query, k=5)
 
             if not results:
-                print("No results found.")
+                print("❌ No results found.")
                 continue
 
-            print(f"\nFound {len(results)} relevant documents:")
-            print("=" * 60)
+            print(f"\n✅ Found {len(results)} relevant document(s):")
+            print("=" * 80)
 
             for i, result in enumerate(results, 1):
-                doc = result["document"]
-                score = result["score"]
+                doc = result.get("document", {})
+                score = result.get("score", 0)
+                title = doc.get("title", "No title")
+                source = doc.get("source", "unknown")
+                abstract = doc.get("abstract", "No abstract")
 
-                print(f"\n{i}. {doc.get('title', 'No title')}...")
-                print(f"   Score: {score:.3f}")
-                print(f"   Source: {doc.get('source', 'unknown')}")
-                print(f"   Abstract: {str(doc.get('abstract', 'No abstract'))}...")
+                # Format score with color indication
+                score_indicator = "🟢" if score > 0.8 else "🟡" if score > 0.6 else "🔴"
 
+                print(f"\n📄 {i}. {title}")
+                print(f"   {score_indicator} Score: {score:.3f} | 📂 Source: {source}")
+
+                # Wrap abstract text
+                wrapped_abstract = textwrap.fill(
+                    abstract,
+                    width=75,
+                    initial_indent="   📝 ",
+                    subsequent_indent="      ",
+                )
+                print(wrapped_abstract)
+                print("-" * 80)
 
         except KeyboardInterrupt:
-            print("\n\nGoodbye!")
+            print("\n\n👋 Goodbye!")
             break
         except Exception as e:
-            print(f"Error: {e}")
-            print("Please try again.")
+            print(f"❌ Error: {e}")
+            print("🔄 Please try again.")
 
 
-def demo_queries(retrieval):
-    """Run demo queries to showcase the system."""
+def demo_queries(retrieval: SciNCLRetrieval):
+    """Enhanced demo queries with improved formatting."""
     print("\n" + "=" * 60)
     print("SciNCL RAG System - Demo Queries")
     print("=" * 60)
 
-    demo_queries = [
+    queries = [
         "machine learning in medical diagnosis",
         "cancer treatment methods",
         "COVID-19 research",
-        "neural networks in healthcare",
     ]
 
-    for query in demo_queries:
-        print(f"\nDemo Query: '{query}'")
-        print("-" * 40)
+    for i, query in enumerate(queries, 1):
+        print(f"\n🔍 Demo Query {i}: '{query}'")
+        print("⏳ Processing...")
+        print("-" * 60)
 
         try:
             results = retrieval.retrieve_similar_documents(query, k=3)
-
             if results:
-                print(f"Found {len(results)} relevant documents:")
-                for i, result in enumerate(results, 1):
-                    doc = result["document"]
-                    score = result["score"]
-                    print(
-                        f"  {i}. {doc.get('title', 'No title')}... (Score: {score:.3f})"
-                    )
-            else:
-                print("No results found.")
+                print(f"✅ Found {len(results)} relevant document(s):")
+                for idx, result in enumerate(results, 1):
+                    doc = result.get("document", {})
+                    title = doc.get("title", "No title")
+                    score = result.get("score", 0)
+                    source = doc.get("source", "unknown")
 
+                    # Score indicator
+                    score_indicator = (
+                        "🟢" if score > 0.8 else "🟡" if score > 0.6 else "🔴"
+                    )
+
+                    print(f"   📄 {idx}. {title}")
+                    print(f"      {score_indicator} Score: {score:.3f} | 📂 {source}")
+            else:
+                print("❌ No results found.")
         except Exception as e:
-            print(f"Error processing query: {e}")
+            print(f"❌ Error processing query: {e}")
 
     print("\n" + "=" * 60)
 
 
 def main():
-    """Main application entry point."""
-    print("SciNCL-based RAG System")
-    print("=" * 30)
+    """Main application entry point with enhanced formatting."""
+    print("\n" + "=" * 60)
+    print("🤖 SciNCL-based RAG System")
+    print("=" * 60)
+    print("📚 Medical Research Paper Retrieval System")
+    print("=" * 60)
 
     try:
-        # Try to load existing artifacts first
         try:
+            print("🔄 Loading existing artifacts...")
             retrieval, documents = load_artifacts()
-            print(f"System ready with {len(documents)} documents")
+            print(f"✅ System ready with {len(documents)} documents")
         except (FileNotFoundError, ValueError):
-            print("No existing artifacts found. Creating new ones...")
+            print("⚠️  No existing artifacts found. Creating new ones...")
+            print("⏳ This may take some time...")
             retrieval, documents = create_artifacts()
-            print(f"System ready with {len(documents)} documents")
+            print(f"✅ System ready with {len(documents)} documents")
 
-        # Run demo queries
+        print("\n🎯 Running demo queries...")
         demo_queries(retrieval)
 
-        # Start interactive mode
+        print("\n🚀 Starting interactive mode...")
         interactive_query(retrieval)
 
     except Exception as e:
-        print(f"Error: {e}")
-        print("Please check your data files and try again.")
+        print(f"\n❌ Error: {e}")
+        print("🔧 Please check your data files and try again.")
+        print("💡 Make sure to run 'uv run download.py' first if you haven't already.")
 
 
 if __name__ == "__main__":
