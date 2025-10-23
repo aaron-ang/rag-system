@@ -64,7 +64,7 @@ def download_semantic_scholar_papers() -> None:
         data = response.json()
 
         with open("data/semanticscholar.json", "w") as f:
-            json.dump(data, f, indent=4)
+            json.dump(data, f, indent=2)
 
         if "data" in data:
             print(f"✓ Downloaded {len(data['data'])} Semantic Scholar papers")
