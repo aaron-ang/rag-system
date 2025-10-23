@@ -29,7 +29,7 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
     required_files = [
         "faiss_index.bin",
         "documents.json",
-        "embeddings.pkl",
+        "document_embeddings.pkl",
     ]
     missing_files = [
         f for f in required_files if not os.path.exists(os.path.join(artifacts_dir, f))
@@ -49,8 +49,7 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
         documents = json.load(f)
 
     # Initialize retrieval system
-    retrieval = SciNCLRetrieval(ingestion)
-    retrieval.load_documents(documents)
+    retrieval = SciNCLRetrieval(ingestion, documents)
 
     print(f"Loaded {len(documents)} documents from artifacts")
     return retrieval, documents
@@ -117,7 +116,6 @@ def create_artifacts(
     if len(all_documents) == 0:
         raise ValueError("No documents found. Please run download.py first.")
 
-
     # Generate embeddings
     embeddings = ingestion.generate_document_embeddings(all_documents)
 
@@ -133,8 +131,7 @@ def create_artifacts(
         json.dump(all_documents, f, indent=2)
 
     # Initialize retrieval system
-    retrieval = SciNCLRetrieval(ingestion)
-    retrieval.load_documents(all_documents)
+    retrieval = SciNCLRetrieval(ingestion, all_documents)
 
     print(f"Created artifacts for {len(all_documents)} documents")
     return retrieval, all_documents

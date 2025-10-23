@@ -1,6 +1,5 @@
 """
 SciNCL-based data ingestion and FAISS retrieval system.
-Implements neighborhood contrastive learning for scientific document representations.
 """
 
 import json
@@ -22,11 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 class SciNCLIngestion:
-    """
-    Data ingestion system based on SciNCL methodology.
-    Handles document processing and embedding generation.
-    """
-
     def __init__(self, model_name: str = "malteos/scincl"):
         """
         Initialize the SciNCL ingestion system.
@@ -49,10 +43,8 @@ class SciNCLIngestion:
         self.faiss_index = None
 
     def load_model(self):
-        """Load the SciNCL model and tokenizer."""
         logger.info(f"Loading SciNCL model on {self.device}")
 
-        # Load SciNCL model and tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.base_model = AutoModel.from_pretrained(self.model_name).to(self.device)
 
@@ -124,7 +116,8 @@ class SciNCLIngestion:
                 document = {
                     "id": paper.get("paperId") or f"ss_{len(documents)}",
                     "title": paper.get("title", ""),
-                    "abstract": paper.get("abstract") or paper.get("tldr", ""),
+                    "abstract": paper.get("abstract")
+                    or paper.get("tldr", {}).get("text", ""),
                     "metadata": {
                         "year": paper.get("year"),
                         "authors": paper.get("authors", []),
@@ -234,13 +227,11 @@ class SciNCLIngestion:
         """Save all artifacts for later use."""
         os.makedirs(output_dir, exist_ok=True)
 
-        # Save FAISS index
         if self.faiss_index is not None:
             faiss.write_index(
                 self.faiss_index, os.path.join(output_dir, "faiss_index.bin")
             )
 
-        # Save document embeddings
         if self.document_embeddings:
             with open(os.path.join(output_dir, "document_embeddings.pkl"), "wb") as f:
                 pickle.dump(self.document_embeddings, f)
@@ -249,12 +240,10 @@ class SciNCLIngestion:
 
     def load_artifacts(self, output_dir: str):
         """Load previously saved artifacts."""
-        # Load FAISS index
         index_path = os.path.join(output_dir, "faiss_index.bin")
         if os.path.exists(index_path):
             self.faiss_index = faiss.read_index(index_path)
 
-        # Load document embeddings
         embeddings_path = os.path.join(output_dir, "document_embeddings.pkl")
         if os.path.exists(embeddings_path):
             with open(embeddings_path, "rb") as f:
@@ -264,12 +253,7 @@ class SciNCLIngestion:
 
 
 class SciNCLRetrieval:
-    """
-    Retrieval system using FAISS and SciNCL methodology.
-    Implements neighborhood contrastive learning for better retrieval.
-    """
-
-    def __init__(self, ingestion_system: SciNCLIngestion):
+    def __init__(self, ingestion_system: SciNCLIngestion, documents: list[dict[str]]):
         """
         Initialize retrieval system.
 
@@ -277,13 +261,10 @@ class SciNCLRetrieval:
             ingestion_system: Initialized SciNCLIngestion system
         """
         self.ingestion = ingestion_system
-        self.documents = []
-        self.document_ids = []
-
-    def load_documents(self, documents: list[dict[str]]):
-        """Load documents for retrieval."""
         self.documents = documents
         self.document_ids = [doc["id"] for doc in documents]
+
+        self.ingestion.load_model()
 
     def retrieve_similar_documents(self, query: str, k: int = 10):
         """
@@ -298,9 +279,6 @@ class SciNCLRetrieval:
         """
         if self.ingestion.faiss_index is None:
             raise ValueError("FAISS index not initialized")
-
-        if self.ingestion.base_model is None:
-            self.ingestion.load_model()
 
         # Encode the query as [CLS] embedding (title-only)
         inputs = self.ingestion.tokenizer(
