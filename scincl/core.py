@@ -112,8 +112,9 @@ class SciNCLIngestion:
                 text = str(row["text"]).strip()
                 title, _, abstract = text.partition(".")
 
-                doc_id = meta["pmid"]
+                doc_id = str(meta["pmid"])
                 documents[doc_id] = Document(
+                    id=doc_id,
                     title=title.strip(),
                     abstract=abstract.strip(),
                     metadata=meta,
@@ -166,6 +167,7 @@ class SciNCLIngestion:
                 }
 
                 documents[doc_id] = Document(
+                    id=doc_id,
                     title=title,
                     abstract=abstract,
                     metadata=metadata,
