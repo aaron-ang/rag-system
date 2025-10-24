@@ -16,6 +16,7 @@ import pandas as pd
 from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

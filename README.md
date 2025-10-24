@@ -46,24 +46,19 @@ uv run main.py
 
 ### CLI Interface
 
-**Note**: On Mac systems, set this environment variable to handle OpenMP:
-```bash
-export KMP_DUPLICATE_LIB_OK=TRUE
-```
-
 **Examples:**
 ```bash
 # Ingest all data using SciNCL
-KMP_DUPLICATE_LIB_OK=TRUE uv run -m scincl.cli ingest
+uv run -m scincl.cli ingest
 
 # Force re-ingestion (delete and rebuild artifacts)
-KMP_DUPLICATE_LIB_OK=TRUE uv run -m scincl.cli ingest --force
+uv run -m scincl.cli ingest --force
 
 # Query the system
-KMP_DUPLICATE_LIB_OK=TRUE uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5
+uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5
 
 # Query with more results
-KMP_DUPLICATE_LIB_OK=TRUE uv run -m scincl.cli query "tuberculosis treatment" --k 10
+uv run -m scincl.cli query "tuberculosis treatment" --k 10
 ```
 
 ### Programmatic Usage
@@ -117,7 +112,7 @@ for result in results:
 - Saves time on repeated runs
 - Use `--force` flag to re-ingest:
   ```bash
-  KMP_DUPLICATE_LIB_OK=TRUE uv run -m scincl.cli ingest --force
+  uv run -m scincl.cli ingest --force
   ```
 
 ### Document Deduplication
@@ -142,12 +137,6 @@ This implementation uses the [SciNCL model](https://huggingface.co/malteos/scinc
 ## Troubleshooting
 
 ### Common Issues
-
-**OpenMP Error on Mac:**
-```
-OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already initialized.
-```
-**Solution:** Set `KMP_DUPLICATE_LIB_OK=TRUE` before running commands.
 
 **Memory Issues During Embedding Generation:**
 - Reduce batch size in `scincl/core.py` (currently set to 16)
