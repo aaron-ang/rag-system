@@ -1,0 +1,11 @@
+query_id,query_text,source_dataset,matching_paper_ids
+1,Retrieve studies analyzing hypoxaemia prevalence among children with respiratory infections.,pubmed_abstracts.csv,"11409574,11409575,11409576"
+2,Find clinical trials comparing antihypertensive treatments and their effects on blood pressure control.,pubmed_abstracts.csv,"11409602,11409607"
+3,Summarize research examining occupational health issues among industrial or healthcare workers.,pubmed_abstracts.csv,"11409640,11409646"
+4,List studies investigating tuberculosis diagnosis or prevalence across different patient populations.,pubmed_abstracts.csv,"11409610,11409611"
+5,Retrieve clinical studies measuring changes in muscle function or oxygen levels during treatment or exercise.,pubmed_abstracts.csv,"11409627,11409631"
+6,What challenges do healthcare professionals face in providing community-based palliative care for patients with advanced illness?,semanticscholar.json,"858469caacfc992a87eb7e9121a1e4b6b125ee19,f2eba7ea12678e3b194a3b25bfc1a72576bdd7fb"
+7,How do patients with colorectal or ovarian cancer experience shared decision making during treatment and follow-up?,semanticscholar.json,"8505bd1a769431c4a25041fbacd03fa0a4faa460,0a6bb31c6d4c058407ae986c7e65731e91a5b28d"
+8,What are the lived experiences of caregivers supporting relatives with dementia or psychosocial illness?,semanticscholar.json,"497c0fb7b77603da60439709014aef35d4102b9b,d9e86cf1747d7855d94dad7cbb1e7241e8f9dedd"
+9,How do healthcare providers promote health literacy among migrant or diverse patient populations?,semanticscholar.json,"0825b4abca3e11368a9c07901e8032e6f0a3eccc,e4445517adf8096592c142f68697ea73d5240779"
+10,"What are patients’ perceptions of living with multimorbidity or long-term conditions, and how does it impact their daily life?",semanticscholar.json,"c67a209e992891071e7d2ff8b9d803d6e03e9784,b5f8d541a72cbe41dbb17a453a04fdee8fefed20"

@@ -3,7 +3,10 @@ Main RAG system application.
 """
 
 import textwrap
+import pandas as pd
 from scincl import SciNCLRetrieval, load_or_create_artifacts
+from scincl.metrics import recall_at_k, precision_at_k, compute_ndcg_at_k
+
 
 
 def interactive_query(retrieval: SciNCLRetrieval):
@@ -125,7 +128,6 @@ def demo_queries(retrieval: SciNCLRetrieval):
 
     print("\n" + "=" * 60)
 
-
 def _score_indicator(score: float):
     if score > 0.8:
         return "🟢"
@@ -133,6 +135,61 @@ def _score_indicator(score: float):
         return "🟡"
     else:
         return "🔴"
+    
+def test_set_queries(retrieval: SciNCLRetrieval):
+    """
+    Runs retrieval on test queries from CSV and returns retrieved and ground-truth docs.
+
+    CSV format: id, query, doc_ids
+    Example:
+        1, "machine learning in medical diagnosis", "doc1|doc2|doc3"
+    """
+    df = pd.read_csv("data/retrieval_requests_with_ids.csv")
+
+    retrieved_docs = []
+    ground_truth_docs = []
+
+    print("\n" + "=" * 60)
+    print("SciNCL RAG System - Test Set Evaluation")
+    print("=" * 60)
+
+    for i, row in df.iterrows():
+        query_id = row["query_id"]
+        query = row["query_text"]
+        gt_doc_ids = set(str(row["matching_paper_ids"]).split(","))  # assumes pipe-separated IDs
+
+
+        print(f"\n🔍 Query {query_id}: '{query}'")
+        print("⏳ Retrieving...")
+        print("-" * 60)
+
+        try:
+            results = retrieval.retrieve_similar_documents(query, k=3)
+            if results:
+                retrieved_ids = [result.doc_id for result in results]
+                formatted_retrieved_ids = [doc_id.split("_")[1] if "pubmed_" in doc_id else doc_id for doc_id in retrieved_ids]
+
+                print(f"Expected documents: {gt_doc_ids}")
+                print(f"✅ Retrieved documents: {formatted_retrieved_ids}")
+            else:
+                retrieved_ids = []
+                print("❌ No results found.")
+
+            retrieved_docs.append(formatted_retrieved_ids)
+            ground_truth_docs.append(gt_doc_ids)
+
+        except Exception as e:
+            print(f"❌ Error processing query '{query}': {e}")
+            retrieved_docs.append([])
+            ground_truth_docs.append(gt_doc_ids)
+
+    print("\n" + "=" * 60)
+    print("✅ Retrieval completed.")
+    print("=" * 60)
+
+    print("Recall@3:", recall_at_k(retrieved_docs, ground_truth_docs, k=3))
+    print("Precision@3:", precision_at_k(retrieved_docs, ground_truth_docs, k=3))
+    print("Mean nDCG@3:", compute_ndcg_at_k(retrieved_docs, ground_truth_docs, k=3))
 
 
 def main():
@@ -146,11 +203,13 @@ def main():
     try:
         retrieval = load_or_create_artifacts()
 
-        print("\n🎯 Running demo queries...")
-        demo_queries(retrieval)
+        # print("\n🎯 Running demo queries...")
+        # demo_queries(retrieval)
 
-        print("\n🚀 Starting interactive mode...")
-        interactive_query(retrieval)
+        # print("\n🚀 Starting interactive mode...")
+        # interactive_query(retrieval)
+
+        test_set_queries(retrieval)
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
