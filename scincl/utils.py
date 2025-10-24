@@ -67,10 +67,7 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
     with open(os.path.join(artifacts_dir, "documents.json"), "r") as f:
         documents_list = json.load(f)
 
-    documents = {}
-    for doc in documents_list:
-        doc_id = doc.pop("id")
-        documents[doc_id] = Document.from_dict(doc)
+    documents = {doc["id"]: Document.from_dict(doc) for doc in documents_list}
 
     retrieval = SciNCLRetrieval(ingestion, documents)
 

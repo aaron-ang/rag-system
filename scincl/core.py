@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 class Document:
     """Represents a research literature document with metadata."""
 
+    id: str
     title: str
     abstract: str
     source: str
@@ -34,15 +35,19 @@ class Document:
 
     def __post_init__(self):
         """Validate document data after initialization."""
+        if self.id is None:
+            raise ValueError("Document ID cannot be None")
         if self.title is None:
             raise ValueError("Document title cannot be None")
         if self.abstract is None:
             self.abstract = ""
 
+        if not self.id.strip():
+            raise ValueError("Document ID cannot be empty")
         if not self.title.strip():
             raise ValueError("Document title cannot be empty")
         if not self.abstract.strip():
-            logger.warning(f"Document '{self.title}' has empty abstract")
+            logger.warning(f"Document '{self.id}' has empty abstract")
 
     def to_dict(self):
         """Convert document to dictionary format."""
@@ -107,7 +112,7 @@ class SciNCLIngestion:
                 text = str(row["text"]).strip()
                 title, _, abstract = text.partition(".")
 
-                doc_id = f"pubmed_{meta.get('pmid', 'unknown')}"
+                doc_id = meta["pmid"]
                 documents[doc_id] = Document(
                     title=title.strip(),
                     abstract=abstract.strip(),
@@ -141,16 +146,16 @@ class SciNCLIngestion:
             papers, desc=f"Processing Semantic Scholar data from {json_path}"
         ):
             try:
-                doc_id = paper.get("paperId") or f"ss_{len(documents)}"
+                doc_id = paper["paperId"]
                 title = paper.get("title", "")
                 abstract = paper.get("abstract", "")
                 if not abstract:
-                    tldr = paper.get("tldr")
+                    tldr = paper["tldr"]
                     if isinstance(tldr, dict):
                         abstract = tldr.get("text", "")
 
                 metadata = {
-                    "year": paper.get("year"),
+                    "year": paper["year"],
                     "authors": paper.get("authors", []),
                     "citationCount": paper.get("citationCount", 0),
                     "referenceCount": paper.get("referenceCount", 0),
@@ -304,7 +309,6 @@ class RetrievalResult:
 
     document: Document
     sim_score: float
-    doc_id: str
 
     def __post_init__(self):
         """Validate retrieval result."""
@@ -367,12 +371,6 @@ class SciNCLRetrieval:
         for score, idx in zip(scores[0], indices[0]):
             doc_id = self.ingestion._doc_ids[idx]
             doc = self.documents.get(doc_id)
-            results.append(
-                RetrievalResult(
-                    document=doc,
-                    sim_score=float(score),
-                    doc_id=doc_id
-                )
-            )
+            results.append(RetrievalResult(document=doc, sim_score=float(score)))
 
         return results

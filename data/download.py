@@ -8,25 +8,23 @@ import os
 import requests
 import pandas as pd
 
-
-def ensure_data_directory() -> None:
-    os.makedirs("data", exist_ok=True)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def download_pubmed_abstracts() -> None:
+def download_pubmed_abstracts():
     try:
         print("Downloading PubMed abstracts...")
         df = pd.read_json(
             "hf://datasets/datajuicer/the-pile-pubmed-abstracts-refined-by-data-juicer/the-pile-pubmed-abstract-refine-result-preview.jsonl",
             lines=True,
         )
-        df.to_csv("data/pubmed_abstracts.csv", index=False)
+        df.to_csv(os.path.join(SCRIPT_DIR, "pubmed_abstracts.csv"), index=False)
         print(f"✓ Downloaded {len(df)} PubMed abstracts")
     except Exception as e:
         raise Exception(f"Error downloading PubMed abstracts: {e}")
 
 
-def download_semantic_scholar_papers() -> None:
+def download_semantic_scholar_papers():
     query = "medicine"
     fields = [
         "url",
@@ -39,7 +37,7 @@ def download_semantic_scholar_papers() -> None:
         "authors",
         "citations",
         "references",
-        "embedding.specter_v2",
+        # "embedding.specter_v2",
         "tldr",
     ]
     fields_of_study = ["Medicine", "Biology"]
@@ -63,7 +61,7 @@ def download_semantic_scholar_papers() -> None:
 
         data = response.json()
 
-        with open("data/semanticscholar.json", "w") as f:
+        with open(os.path.join(SCRIPT_DIR, "semanticscholar.json"), "w") as f:
             json.dump(data, f, indent=2)
 
         if "data" in data:
@@ -78,13 +76,10 @@ def download_semantic_scholar_papers() -> None:
         raise Exception(f"Unexpected error: {e}")
 
 
-def main() -> None:
+def main():
     print("Starting data download process...")
-
-    ensure_data_directory()
     download_pubmed_abstracts()
     download_semantic_scholar_papers()
-
     print("✓ Data download completed successfully!")
 
 
