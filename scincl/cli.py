@@ -55,11 +55,11 @@ def query_system(args):
         print("=" * 80)
 
         for i, result in enumerate(results, 1):
-            doc = result["document"]
-            print(f"\n{i}. {doc.get('title', 'No title')}")
-            print(f"   Score: {result['score']:.3f}")
-            print(f"   Source: {doc.get('source', 'unknown')}")
-            print(f"   Abstract: {str(doc.get('abstract', 'No abstract'))}")
+            doc = result.document
+            print(f"\n{i}. {doc.title}")
+            print(f"   Score: {result.sim_score:.3f}")
+            print(f"   Source: {doc.source}")
+            print(f"   Abstract: {str(doc.abstract)}")
 
     except Exception as e:
         print(f"Error loading artifacts: {e}")
