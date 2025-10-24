@@ -60,19 +60,25 @@ def interactive_query(retrieval: SciNCLRetrieval):
                 title = doc.title
                 source = doc.source
                 abstract = doc.abstract
-                score_indicator = "🟢" if score > 0.8 else "🟡" if score > 0.6 else "🔴"
+                score_indicator = _score_indicator(score)
 
-                print(f"\n📄 {i}. {title}")
-                print(f"   {score_indicator} Score: {score:.3f} | 📂 Source: {source}")
-
+                wrapped_title = textwrap.fill(
+                    title,
+                    width=75,
+                    initial_indent=f"📄 {i}. ",
+                    subsequent_indent="      ",
+                )
                 wrapped_abstract = textwrap.fill(
-                    abstract,
+                    abstract[:500] + "...",
                     width=75,
                     initial_indent="   📝 ",
                     subsequent_indent="      ",
                 )
+
+                print(f"\n{wrapped_title}")
+                print(f"   {score_indicator} Score: {score:.3f} | 📂 Source: {source}")
                 print(wrapped_abstract)
-                print("-" * 80)
+                print("\n" + "-" * 80)
 
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")
@@ -108,10 +114,7 @@ def demo_queries(retrieval: SciNCLRetrieval):
                     title = doc.title
                     score = result.score
                     source = doc.source
-                    score_indicator = (
-                        "🟢" if score > 0.8 else "🟡" if score > 0.6 else "🔴"
-                    )
-
+                    score_indicator = _score_indicator(score)
                     print(f"   📄 {idx}. {title}")
                     print(f"      {score_indicator} Score: {score:.3f} | 📂 {source}")
             else:
@@ -120,6 +123,15 @@ def demo_queries(retrieval: SciNCLRetrieval):
             print(f"❌ Error processing query: {e}")
 
     print("\n" + "=" * 60)
+
+
+def _score_indicator(score: float):
+    if score > 0.8:
+        return "🟢"
+    elif score > 0.6:
+        return "🟡"
+    else:
+        return "🔴"
 
 
 def main():
