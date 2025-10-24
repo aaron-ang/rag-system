@@ -10,6 +10,26 @@ from typing import Callable
 from scincl.core import SciNCLIngestion, SciNCLRetrieval, Document
 
 
+def load_or_create_artifacts(artifacts_dir="data/scincl_artifacts"):
+    """
+    Load existing artifacts or create new ones if they don't exist.
+
+    Args:
+        artifacts_dir: Directory containing artifacts
+    """
+    try:
+        print("🔄 Loading existing artifacts...")
+        retrieval, documents = load_artifacts(artifacts_dir)
+        print(f"✅ System ready with {len(documents)} documents")
+        return retrieval
+    except (FileNotFoundError, ValueError):
+        print("⚠️  No existing artifacts found. Creating new ones...")
+        print("⏳ This may take some time...")
+        retrieval, documents = create_artifacts(artifacts_dir=artifacts_dir)
+        print(f"✅ System ready with {len(documents)} documents")
+        return retrieval
+
+
 def load_artifacts(artifacts_dir="data/scincl_artifacts"):
     """
     Load existing artifacts from disk.

@@ -66,6 +66,26 @@ KMP_DUPLICATE_LIB_OK=TRUE uv run -m scincl.cli query "machine learning in medica
 KMP_DUPLICATE_LIB_OK=TRUE uv run -m scincl.cli query "tuberculosis treatment" --k 10
 ```
 
+### Programmatic Usage
+
+```python
+from scincl import load_or_create_artifacts
+
+# Load existing artifacts or create new ones
+retrieval, documents = load_or_create_artifacts()
+
+# Query the system
+results = retrieval.retrieve_similar_documents("machine learning in medical diagnosis", k=5)
+
+# Process results
+for result in results:
+    doc = result.document
+    print(f"{doc.title} (Score: {result.score:.3f})")
+    print(f"Source: {doc.source}")
+    print(f"Abstract: {doc.abstract[:200]}...")
+    print()
+```
+
 ## Data Sources
 
 ### PubMed Abstracts (`data/pubmed_abstracts.csv`)

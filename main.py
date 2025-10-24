@@ -3,7 +3,7 @@ Main RAG system application.
 """
 
 import textwrap
-from scincl import SciNCLRetrieval, load_artifacts, create_artifacts
+from scincl import SciNCLRetrieval, load_or_create_artifacts
 
 
 def interactive_query(retrieval: SciNCLRetrieval):
@@ -143,15 +143,7 @@ def main():
     print("=" * 60)
 
     try:
-        try:
-            print("🔄 Loading existing artifacts...")
-            retrieval, documents = load_artifacts()
-            print(f"✅ System ready with {len(documents)} documents")
-        except (FileNotFoundError, ValueError):
-            print("⚠️  No existing artifacts found. Creating new ones...")
-            print("⏳ This may take some time...")
-            retrieval, documents = create_artifacts()
-            print(f"✅ System ready with {len(documents)} documents")
+        retrieval = load_or_create_artifacts()
 
         print("\n🎯 Running demo queries...")
         demo_queries(retrieval)
