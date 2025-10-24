@@ -139,10 +139,6 @@ def _score_indicator(score: float):
 def test_set_queries(retrieval: SciNCLRetrieval):
     """
     Runs retrieval on test queries from CSV and returns retrieved and ground-truth docs.
-
-    CSV format: id, query, doc_ids
-    Example:
-        1, "machine learning in medical diagnosis", "doc1|doc2|doc3"
     """
     df = pd.read_csv("data/retrieval_requests_with_ids.csv")
 
@@ -164,7 +160,7 @@ def test_set_queries(retrieval: SciNCLRetrieval):
         print("-" * 60)
 
         try:
-            results = retrieval.retrieve_similar_documents(query, k=3)
+            results = retrieval.retrieve_similar_documents(query, k=2)
             if results:
                 retrieved_ids = [result.doc_id for result in results]
                 formatted_retrieved_ids = [doc_id.split("_")[1] if "pubmed_" in doc_id else doc_id for doc_id in retrieved_ids]
@@ -187,9 +183,9 @@ def test_set_queries(retrieval: SciNCLRetrieval):
     print("✅ Retrieval completed.")
     print("=" * 60)
 
-    print("Recall@3:", recall_at_k(retrieved_docs, ground_truth_docs, k=3))
-    print("Precision@3:", precision_at_k(retrieved_docs, ground_truth_docs, k=3))
-    print("Mean nDCG@3:", compute_ndcg_at_k(retrieved_docs, ground_truth_docs, k=3))
+    print("Recall@3:", recall_at_k(retrieved_docs, ground_truth_docs, k=2))
+    print("Precision@3:", precision_at_k(retrieved_docs, ground_truth_docs, k=2))
+    print("Mean nDCG@3:", compute_ndcg_at_k(retrieved_docs, ground_truth_docs, k=2))
 
 
 def main():
