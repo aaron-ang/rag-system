@@ -46,11 +46,11 @@ def ndcg_at_k(retrieved_docs: list[list[str]], ground_truth_docs: list[set[str]]
     return np.mean(ndcg_scores)
 
 
-def test_set_queries(retrieval: SciNCLRetrieval):
+def evaluate_retriever(retrieval: SciNCLRetrieval, k=3):
     """
-    Runs retrieval on test queries from CSV and returns retrieved and ground-truth docs.
+    Evaluates the retrieval system on a test set of queries.
     """
-    df = pd.read_csv("data/retrieval_requests_with_ids.csv")
+    df = pd.read_csv("eval/retrieval_requests.csv")
 
     retrieved_docs = []
     ground_truth_docs = []
@@ -59,19 +59,16 @@ def test_set_queries(retrieval: SciNCLRetrieval):
     print("SciNCL RAG System - Test Set Evaluation")
     print("=" * 60)
 
-    for i, row in df.iterrows():
+    for _, row in df.iterrows():
         query_id = row["query_id"]
         query = row["query_text"]
-        gt_doc_ids = set(
-            str(row["matching_paper_ids"]).split(",")
-        )  # assumes comma-separated IDs
+        gt_doc_ids = set(str(row["target_paper_ids"]).split(","))
 
         print(f"\n🔍 Query {query_id}: '{query}'")
-        print("⏳ Retrieving...")
         print("-" * 60)
 
         try:
-            results = retrieval.retrieve_similar_documents(query, k=2)
+            results = retrieval.retrieve_similar_documents(query, k)
             if results:
                 retrieved_ids = [result.document.id for result in results]
                 print(f"Expected documents: {gt_doc_ids}")
@@ -92,11 +89,11 @@ def test_set_queries(retrieval: SciNCLRetrieval):
     print("✅ Retrieval completed.")
     print("=" * 60)
 
-    print("Recall@3:", recall_at_k(retrieved_docs, ground_truth_docs, k=2))
-    print("Precision@3:", precision_at_k(retrieved_docs, ground_truth_docs, k=2))
-    print("Mean nDCG@3:", ndcg_at_k(retrieved_docs, ground_truth_docs, k=2))
+    print(f"Recall@{k}:", recall_at_k(retrieved_docs, ground_truth_docs, k))
+    print(f"Precision@{k}:", precision_at_k(retrieved_docs, ground_truth_docs, k))
+    print(f"Mean nDCG@{k}:", ndcg_at_k(retrieved_docs, ground_truth_docs, k))
 
 
 if __name__ == "__main__":
     retrieval = load_or_create_artifacts()
-    test_set_queries(retrieval)
+    evaluate_retriever(retrieval)
