@@ -372,7 +372,7 @@ class SciNCLRetrieval:
         results: list[RetrievalResult] = []
         for score, idx in zip(scores[0], indices[0]):
             doc_id = self.ingestion._doc_ids[idx]
-            doc = self.documents.get(doc_id)
+            doc = self.documents[doc_id]
             results.append(RetrievalResult(document=doc, sim_score=float(score)))
 
         return results
