@@ -134,6 +134,27 @@ This implementation uses the [SciNCL model](https://huggingface.co/malteos/scinc
 3. **FAISS Integration**: Efficient similarity search with multiple index types
 4. **Cosine Similarity**: Uses normalized embeddings for accurate similarity matching
 
+## Evaluation
+
+```bash
+# Run benchmark evaluation
+uv run -m eval.benchmark
+```
+
+### Metrics
+- **Recall@k**: Percentage of queries with ≥1 relevant document in top-k
+- **Precision@k**: Average precision across all queries  
+- **nDCG@k**: Ranking quality with position weighting
+- **MAP**: Mean average precision across all queries
+
+### Test Queries
+10 diverse queries covering pediatric medicine, infectious diseases, AI in healthcare, precision medicine, oncology, and more. Stored in `eval/retrieval_queries.csv`.
+
+### Custom Evaluation
+1. Edit `eval/retrieval_queries.csv` with new queries and target papers
+2. Run `uv run -m eval.benchmark`
+3. Interpret results: higher metrics = better performance
+
 ## Troubleshooting
 
 ### Common Issues
