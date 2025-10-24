@@ -304,6 +304,7 @@ class RetrievalResult:
 
     document: Document
     sim_score: float
+    doc_id: str
 
     def __post_init__(self):
         """Validate retrieval result."""
@@ -370,6 +371,7 @@ class SciNCLRetrieval:
                 RetrievalResult(
                     document=doc,
                     sim_score=float(score),
+                    doc_id=doc_id
                 )
             )
 

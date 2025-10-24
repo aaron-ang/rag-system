@@ -115,6 +115,7 @@ def demo_queries(retrieval: SciNCLRetrieval):
                     score = result.sim_score
                     source = doc.source
                     score_indicator = _score_indicator(score)
+                    doc_id = result.doc_id
                     print(f"   📄 {idx}. {title}")
                     print(f"      {score_indicator} Score: {score:.3f} | 📂 {source}")
             else:
