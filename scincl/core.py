@@ -231,15 +231,27 @@ class SciNCLIngestion:
         logger.info(f"Creating FAISS '{index_type}' index")
 
         dim = embeddings.shape[1]
+        n_vectors = len(embeddings)
 
         if index_type == "flat":
             index = faiss.IndexFlatIP(dim)
         elif index_type == "ivf":
-            nlist = min(100, max(1, len(embeddings) // 10))
+            # Calculate nlist based on FAISS guidance: K = 4*sqrt(N) to 16*sqrt(N)
+            sqrt_n = int(n_vectors**0.5)
+            nlist = 4 * sqrt_n
+            nlist = min(nlist, n_vectors)
             quantizer = faiss.IndexFlatIP(dim)
             index = faiss.IndexIVFFlat(quantizer, dim, nlist)
+            index.nprobe = max(1, nlist // 4)
+            logger.info(f"IVF parameters: nlist={nlist}, nprobe={index.nprobe}")
         elif index_type == "hnsw":
-            index = faiss.IndexHNSWFlat(dim, 32)
+            # HNSW parameter: 4 <= M <= 64
+            hnsw_m = 16
+            index = faiss.IndexHNSWFlat(dim, hnsw_m)
+            # Set efSearch for speed-accuracy tradeoff (default: 16)
+            ef_search = 16
+            index.hnsw.efSearch = ef_search
+            logger.info(f"HNSW parameters: M={hnsw_m}, efSearch={ef_search}")
         else:
             raise ValueError(f"Unsupported index type: {index_type}")
 
@@ -247,8 +259,10 @@ class SciNCLIngestion:
         faiss.normalize_L2(embeddings)
 
         if index_type == "ivf":
+            logger.info("Training IVF index...")
             index.train(embeddings)
 
+        logger.info("Adding embeddings to index...")
         index.add(embeddings)
         self.faiss_index = index
 
@@ -289,20 +303,18 @@ class RetrievalResult:
     """Represents a document retrieval result with similarity score."""
 
     document: Document
-    score: float
-    similarity: float
+    sim_score: float
 
     def __post_init__(self):
         """Validate retrieval result."""
-        if not 0.0 <= self.score <= 1.0:
-            logger.warning(f"Score {self.score} outside expected range [0.0, 1.0]")
+        if not 0.0 <= self.sim_score <= 1.0:
+            logger.warning(f"Score {self.sim_score} outside expected range [0.0, 1.0]")
 
     def to_dict(self):
         """Convert result to dictionary format."""
         return {
             "document": self.document.to_dict(),
-            "score": self.score,
-            "similarity": self.similarity,
+            "score": self.sim_score,
         }
 
 
@@ -357,8 +369,7 @@ class SciNCLRetrieval:
             results.append(
                 RetrievalResult(
                     document=doc,
-                    score=float(score),
-                    similarity=float(score),
+                    sim_score=float(score),
                 )
             )
 
