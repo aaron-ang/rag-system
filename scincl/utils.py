@@ -5,8 +5,9 @@ Common functions for data availability checks and artifact management.
 
 import os
 import json
+from typing import Callable
 
-from scincl.core import SciNCLIngestion, SciNCLRetrieval
+from scincl.core import SciNCLIngestion, SciNCLRetrieval, Document
 
 
 def load_artifacts(artifacts_dir="data/scincl_artifacts"):
@@ -29,7 +30,7 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
     required_files = [
         "faiss_index.bin",
         "documents.json",
-        "document_embeddings.pkl",
+        "doc_ids.pkl",
     ]
     missing_files = [
         f for f in required_files if not os.path.exists(os.path.join(artifacts_dir, f))
@@ -40,15 +41,17 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
 
     print("Loading existing artifacts...")
 
-    # Load ingestion system
     ingestion = SciNCLIngestion()
     ingestion.load_artifacts(artifacts_dir)
 
-    # Load documents
     with open(os.path.join(artifacts_dir, "documents.json"), "r") as f:
-        documents = json.load(f)
+        documents_list = json.load(f)
 
-    # Initialize retrieval system
+    documents = {}
+    for doc in documents_list:
+        doc_id = doc.pop("id")
+        documents[doc_id] = Document.from_dict(doc)
+
     retrieval = SciNCLRetrieval(ingestion, documents)
 
     print(f"Loaded {len(documents)} documents from artifacts")
@@ -65,7 +68,7 @@ def create_artifacts(
 
     Args:
         model_name: SciNCL model name to use
-        index_type: FAISS index type
+        index_type: FAISS index type ("flat", "ivf", "hnsw", etc.)
         artifacts_dir: Directory to save artifacts
 
     Returns:
@@ -73,66 +76,58 @@ def create_artifacts(
     """
     print("Creating new artifacts...")
 
-    # Check data availability
     if not _check_data_availability():
         raise ValueError("Required data files are missing")
 
-    # Initialize ingestion system
     ingestion = SciNCLIngestion(model_name=model_name)
 
-    # Process PubMed data
-    pubmed_docs = []
-    if os.path.exists("data/pubmed_abstracts.csv"):
-        print("Processing PubMed abstracts...")
-        pubmed_docs = ingestion.process_pubmed_data("data/pubmed_abstracts.csv")
-    else:
-        print("PubMed data not found, skipping...")
+    def _try_process_dataset(path: str, name: str, process_func: Callable):
+        if os.path.exists(path):
+            print(f"Processing {name}...")
+            return process_func(path)
+        print(f"{name} not found, skipping...")
+        return {}
 
-    # Process Semantic Scholar data
-    ss_docs = []
-    if os.path.exists("data/semanticscholar.json"):
-        print("Processing Semantic Scholar papers...")
-        ss_docs = ingestion.process_semantic_scholar_data("data/semanticscholar.json")
-    else:
-        print("Semantic Scholar data not found, skipping...")
+    pubmed_docs = _try_process_dataset(
+        "data/pubmed_abstracts.csv", "PubMed abstracts", ingestion.process_pubmed_data
+    )
+    ss_docs = _try_process_dataset(
+        "data/semanticscholar.json",
+        "Semantic Scholar papers",
+        ingestion.process_semantic_scholar_data,
+    )
 
-    # Combine and deduplicate documents
-    all_documents = pubmed_docs + ss_docs
+    # Combine and deduplicate by title
+    all_documents = {**pubmed_docs, **ss_docs}
     print(f"Total documents (before deduplication): {len(all_documents)}")
 
-    # Deduplicate by title
     seen_titles = set()
-    unique_documents = []
-    for doc in all_documents:
-        title = doc.get("title")
-        if title in seen_titles:
-            continue
-        seen_titles.add(title)
-        unique_documents.append(doc)
+    deduped_documents: dict[str, Document] = {}
+    for doc_id, doc in all_documents.items():
+        if doc.title not in seen_titles:
+            deduped_documents[doc_id] = doc
+            seen_titles.add(doc.title)
 
-    all_documents = unique_documents
+    all_documents = deduped_documents
     print(f"Total documents (after deduplication): {len(all_documents)}")
 
-    if len(all_documents) == 0:
+    if not all_documents:
         raise ValueError("No documents found. Please run download.py first.")
 
-    # Generate embeddings
     embeddings = ingestion.generate_document_embeddings(all_documents)
-
-    # Create FAISS index
     ingestion.create_faiss_index(embeddings, index_type=index_type)
 
-    # Save artifacts
     os.makedirs(artifacts_dir, exist_ok=True)
     ingestion.save_artifacts(artifacts_dir)
 
-    # Save documents
+    # Save documents as a JSON list
+    documents_list = [
+        {"id": doc_id, **doc.to_dict()} for doc_id, doc in all_documents.items()
+    ]
     with open(os.path.join(artifacts_dir, "documents.json"), "w") as f:
-        json.dump(all_documents, f, indent=2)
+        json.dump(documents_list, f, indent=2)
 
-    # Initialize retrieval system
     retrieval = SciNCLRetrieval(ingestion, all_documents)
-
     print(f"Created artifacts for {len(all_documents)} documents")
     return retrieval, all_documents
 

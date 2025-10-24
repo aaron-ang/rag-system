@@ -55,19 +55,16 @@ def interactive_query(retrieval: SciNCLRetrieval):
             print("=" * 80)
 
             for i, result in enumerate(results, 1):
-                doc = result.get("document", {})
-                score = result.get("score", 0)
-                title = doc.get("title", "No title")
-                source = doc.get("source", "unknown")
-                abstract = doc.get("abstract", "No abstract")
-
-                # Format score with color indication
+                doc = result.document
+                score = result.score
+                title = doc.title
+                source = doc.source
+                abstract = doc.abstract
                 score_indicator = "🟢" if score > 0.8 else "🟡" if score > 0.6 else "🔴"
 
                 print(f"\n📄 {i}. {title}")
                 print(f"   {score_indicator} Score: {score:.3f} | 📂 Source: {source}")
 
-                # Wrap abstract text
                 wrapped_abstract = textwrap.fill(
                     abstract,
                     width=75,
@@ -107,12 +104,10 @@ def demo_queries(retrieval: SciNCLRetrieval):
             if results:
                 print(f"✅ Found {len(results)} relevant document(s):")
                 for idx, result in enumerate(results, 1):
-                    doc = result.get("document", {})
-                    title = doc.get("title", "No title")
-                    score = result.get("score", 0)
-                    source = doc.get("source", "unknown")
-
-                    # Score indicator
+                    doc = result.document
+                    title = doc.title
+                    score = result.score
+                    source = doc.source
                     score_indicator = (
                         "🟢" if score > 0.8 else "🟡" if score > 0.6 else "🔴"
                     )
