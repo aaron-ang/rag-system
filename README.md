@@ -137,36 +137,39 @@ This implementation uses the [SciNCL model](https://huggingface.co/malteos/scinc
 ## Evaluation
 
 ```bash
-# Run benchmark evaluation
+# Default (SciNCL+FAISS)
 uv run -m eval.benchmark
+
+# Specific backend: scincl | qdrant_st | qdrant_tfidf | all
+uv run -m eval.benchmark --backend all -k 10
 ```
 
-### Metrics
-- **Recall@k**: Percentage of queries with ≥1 relevant document in top-k
-- **Precision@k**: Average precision across all queries  
-- **nDCG@k**: Ranking quality with position weighting
-- **MAP**: Mean average precision across all queries
+**Metrics:** Recall@k, Precision@k, nDCG@k, MAP, MRR@k
+**Test Set:** 10 queries in `eval/retrieval_queries.csv`
 
-### Test Queries
-10 diverse queries covering pediatric medicine, infectious diseases, AI in healthcare, precision medicine, oncology, and more. Stored in `eval/retrieval_queries.csv`.
+## Alternative Backend: Qdrant
 
-### Custom Evaluation
-1. Edit `eval/retrieval_queries.csv` with new queries and target papers
-2. Run `uv run -m eval.benchmark`
-3. Interpret results: higher metrics = better performance
+Production-ready vector database with persistent storage. Two embedding approaches:
+- **SentenceTransformer** (recommended): Neural embeddings
+- **TF-IDF** (baseline): Fast, no GPU required
+
+```bash
+# Setup & run
+python -m qdrant.setup
+python -m qdrant.sentence_transformer  # or: qdrant.tfidf
+python -m qdrant.cli
+
+# Options: --backend tfidf | --query "your question"
+# Also: qdrant.examples, qdrant.test --compare
+```
+
+**When to use:**
+- **SciNCL+FAISS**: Research, benchmarks, official methodology
+- **Qdrant+ST**: Production, persistent storage, scalable
+- **Qdrant+TF-IDF**: Baselines, prototyping, CPU-only
 
 ## Troubleshooting
 
-### Common Issues
-
-**Memory Issues During Embedding Generation:**
-- Reduce batch size in `scincl/core.py` (currently set to 16)
-- Use CPU instead of GPU if running out of memory
-
-**Artifacts Not Found:**
-- Run `python -m scincl.cli ingest` first to create artifacts
-- Check that `data/` directory contains the required data files
-
-**Import Errors:**
-- Ensure you're using `uv run -m scincl.cli` (not direct Python execution)
-- Verify all dependencies are installed with `uv sync`
+**Memory Issues:** Reduce batch size in `scincl/core.py` or use CPU
+**Artifacts Not Found:** Run `python -m scincl.cli ingest` first
+**Qdrant Issues:** Check Docker (`docker ps`), restart (`docker-compose restart`), or reprocess data (`python -m qdrant.sentence_transformer`)
