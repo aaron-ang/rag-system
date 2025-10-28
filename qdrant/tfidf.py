@@ -55,7 +55,7 @@ class TfidfRAG:
         self.vectorizer = TfidfVectorizer(
             max_features=1000, stop_words="english", ngram_range=(1, 2)
         )
-        self.embedding_dim = 1000  # Will be set after fitting
+        self.embedding_dim = None  # Will be set after fitting the vectorizer
 
         # Try to load existing vectorizer
         self._load_vectorizer()
@@ -95,8 +95,24 @@ class TfidfRAG:
         except Exception as e:
             print(f"⚠️  Could not save vectorizer: {e}")
 
-    def setup_collection(self):
-        """Create or recreate the Qdrant collection."""
+    def setup_collection(self, documents: List[Dict[str, Any]]) -> List[PointStruct]:
+        """Generate embeddings and create Qdrant collection with correct dimensions."""
+        # Generate embeddings (this fits the vectorizer and sets embedding_dim)
+        print("Generating TF-IDF embeddings...")
+        texts = [doc["text"] for doc in documents]
+
+        print("Fitting TF-IDF vectorizer...")
+        tfidf_matrix = self.vectorizer.fit_transform(texts)
+        self.embedding_dim = tfidf_matrix.shape[1]
+        print(f"✅ Vectorizer fitted (dimension: {self.embedding_dim})")
+
+        # Save the fitted vectorizer
+        self._save_vectorizer()
+
+        # Convert to dense arrays
+        embeddings = tfidf_matrix.toarray()
+
+        # Now create the collection with the correct dimension
         try:
             # Delete existing collection if it exists
             self.qdrant_client.delete_collection(self.collection_name)
@@ -111,7 +127,37 @@ class TfidfRAG:
                 size=self.embedding_dim, distance=Distance.COSINE
             ),
         )
-        print(f"✅ Created collection: {self.collection_name}")
+        print(
+            f"✅ Created collection: {self.collection_name} (dimension: {self.embedding_dim})"
+        )
+
+        # Create Qdrant points
+        points = []
+        for i, (doc, embedding) in enumerate(zip(documents, embeddings)):
+            if i % 20 == 0:
+                print(f"Creating points: {i + 1}/{len(documents)}")
+
+            point = PointStruct(
+                id=doc["id"],
+                vector=embedding.tolist(),
+                payload={
+                    "source": doc["source"],
+                    "title": doc["title"],
+                    "text": doc["text"],
+                    "abstract": doc["abstract"],
+                    "year": doc["year"],
+                    "citations": doc["citations"],
+                    "authors": doc["authors"],
+                    "pmid": doc.get("pmid"),
+                    "paper_id": doc.get("paper_id"),
+                    "url": doc.get("url"),
+                    "metadata": doc["metadata"],
+                },
+            )
+            points.append(point)
+
+        print(f"✅ Generated {len(points)} points")
+        return points
 
     def process_pubmed_data(self, csv_path: str) -> List[Dict[str, Any]]:
         """Process PubMed abstracts CSV data."""
@@ -190,53 +236,6 @@ class TfidfRAG:
 
         print(f"✅ Processed {len(documents)} Semantic Scholar papers")
         return documents
-
-    def generate_embeddings(self, documents: List[Dict[str, Any]]) -> List[PointStruct]:
-        """Generate TF-IDF embeddings for documents."""
-        print("Generating TF-IDF embeddings...")
-
-        # Extract texts for TF-IDF
-        texts = [doc["text"] for doc in documents]
-
-        # Fit TF-IDF vectorizer
-        print("Fitting TF-IDF vectorizer...")
-        tfidf_matrix = self.vectorizer.fit_transform(texts)
-        self.embedding_dim = tfidf_matrix.shape[1]
-
-        # Save the fitted vectorizer
-        self._save_vectorizer()
-
-        # Convert to dense arrays
-        embeddings = tfidf_matrix.toarray()
-
-        # Create Qdrant points
-        points = []
-        for i, (doc, embedding) in enumerate(zip(documents, embeddings)):
-            if i % 20 == 0:
-                print(f"Processing document {i + 1}/{len(documents)}")
-
-            # Create Qdrant point
-            point = PointStruct(
-                id=doc["id"],
-                vector=embedding.tolist(),
-                payload={
-                    "source": doc["source"],
-                    "title": doc["title"],
-                    "text": doc["text"],
-                    "abstract": doc["abstract"],
-                    "year": doc["year"],
-                    "citations": doc["citations"],
-                    "authors": doc["authors"],
-                    "pmid": doc.get("pmid"),  # PubMed ID
-                    "paper_id": doc.get("paper_id"),  # Semantic Scholar ID
-                    "url": doc.get("url"),  # Paper URL
-                    "metadata": doc["metadata"],
-                },
-            )
-            points.append(point)
-
-        print(f"✅ Generated embeddings for {len(points)} documents")
-        return points
 
     def upload_to_qdrant(self, points: List[PointStruct]):
         """Upload points to Qdrant collection."""
@@ -411,39 +410,26 @@ def main():
     # Initialize RAG system
     rag = TfidfRAG()
 
-    # Setup collection
-    rag.setup_collection()
-
-    # Process and upload data
     print("\n📚 Processing data sources...")
-
-    # Process PubMed data
     pubmed_docs = rag.process_pubmed_data("data/pubmed_abstracts.csv")
-
-    # Process Semantic Scholar data
     semantic_docs = rag.process_semantic_scholar_data("data/semanticscholar.json")
 
     # Combine all documents
     all_documents = pubmed_docs + semantic_docs
     print(f"📊 Total documents: {len(all_documents)}")
 
-    # Generate embeddings and upload
-    print("\n🔢 Generating embeddings...")
-    points = rag.generate_embeddings(all_documents)
+    print("\n🔢 Setting up collection with TF-IDF embeddings...")
+    points = rag.setup_collection(all_documents)
 
     print("\n📤 Uploading to Qdrant...")
     rag.upload_to_qdrant(points)
 
-    # Test the system
     print("\n🧪 Testing the system...")
-
-    # Test queries
     test_queries = [
         "What are the symptoms of hypoxaemia in children?",
         "How is oxygen therapy administered?",
         "What are the risk factors for pneumonia in children?",
     ]
-
     for query in test_queries:
         print(f"\n{'=' * 60}")
         print(f"Query: {query}")
@@ -465,7 +451,6 @@ def main():
             print("\n🤖 Generated Answer:")
             print(result["answer"])
 
-    # Collection info
     print("\n📊 Collection Info:")
     info = rag.get_collection_info()
     print(f"Documents in collection: {info.get('vectors_count', 'Unknown')}")
