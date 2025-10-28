@@ -178,18 +178,15 @@ class SentenceTransformerRAG:
         """Generate embeddings for documents and create Qdrant points."""
         print("Generating embeddings...")
 
+        texts: list[str] = [doc["text"] for doc in documents]
+        embeddings = self.embedding_model.encode(texts, show_progress_bar=True)
+
         points = []
-        for i, doc in enumerate(documents):
-            if i % 20 == 0:
-                print(f"Processing document {i + 1}/{len(documents)}")
-
-            # Generate embedding
-            embedding = self.embedding_model.encode(doc["text"]).tolist()
-
+        for doc, embedding in zip(documents, embeddings):
             # Create Qdrant point
             point = PointStruct(
                 id=doc["id"],
-                vector=embedding,
+                vector=embedding.tolist(),
                 payload={
                     "source": doc["source"],
                     "title": doc["title"],
@@ -198,9 +195,6 @@ class SentenceTransformerRAG:
                     "year": doc["year"],
                     "citations": doc["citations"],
                     "authors": doc["authors"],
-                    "pmid": doc.get("pmid"),  # PubMed ID
-                    "paper_id": doc.get("paper_id"),  # Semantic Scholar ID
-                    "url": doc.get("url"),  # Paper URL
                     "metadata": doc["metadata"],
                 },
             )
