@@ -181,47 +181,83 @@ class SciNCLIngestion:
 
     def generate_document_embeddings(self, documents: dict[str, Document]):
         """
-        Generate document embeddings using the SciNCL model.
+        Generate document embeddings using Sliding Window chunking.
 
         Args:
             documents: dict of {doc_id: Document}
 
         Returns:
-            np.ndarray: Embeddings array for all documents (order follows input dict)
+            np.ndarray: Embeddings array for all document chunks (order follows input dict)
         """
-        logger.info("Generating document embeddings using SciNCL model")
+        logger.info("Generating embeddings with Sliding Window strategy...")
 
-        batch_size = 16
-        doc_items = list(documents.items())
+        # Map embedding indices back to Document IDs
+        self._doc_ids = []
         embeddings = []
 
-        def _prepare_text(doc: Document):
-            sep = self.tokenizer.sep_token or "[SEP]"
-            return f"{doc.title}{sep}{doc.abstract}"
+        # Stride parameters
+        MAX_LEN = 512
+        STRIDE = 384  # 512 - 128 overlap
 
-        for i in tqdm(
-            range(0, len(doc_items), batch_size), desc="Generating embeddings"
-        ):
-            batch = doc_items[i : i + batch_size]
-            batch_texts = [_prepare_text(doc) for _, doc in batch]
-            inputs = self.tokenizer(
-                batch_texts,
-                padding=True,
-                truncation=True,
+        sep = self.tokenizer.sep_token or "[SEP]"
+        doc_items = list(documents.items())
+
+        # We process one document at a time to handle its variable chunks
+        for doc_id, doc in tqdm(doc_items, desc="Chunking and Embedding"):
+
+            # 1. Create the full text
+            full_text = f"{doc.title}{sep}{doc.abstract}"
+
+            # 2. Tokenize without truncation first to get total length
+            tokens = self.tokenizer(
+                full_text,
+                add_special_tokens=True,
                 return_tensors="pt",
-                max_length=512,
-            ).to(self.device)
+                return_attention_mask=False,  # We handle this manually
+            ).input_ids[0]  # Get the 1D tensor
 
-            with torch.no_grad():
-                outputs = self.base_model(**inputs)
-                cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-                embeddings.append(cls_emb)
+            total_tokens = tokens.size(0)
 
+            # 3. Sliding Window Loop
+            if total_tokens <= MAX_LEN:
+                # Case A: Fits in one chunk
+                chunk_input = tokens.unsqueeze(0).to(self.device)
+                self._generate_single_embedding(chunk_input, embeddings)
+                self._doc_ids.append(doc_id)
+            else:
+                # Case B: Needs chunking
+                for i in range(0, total_tokens, STRIDE):
+                    # Slice the tokens
+                    chunk = tokens[i : i + MAX_LEN]
+
+                    # If the last chunk is too small (e.g. < 50 tokens),
+                    # you might opt to skip it or pad it.
+                    # BERT handles variable length, so we just process it.
+
+                    chunk_input = chunk.unsqueeze(0).to(self.device)
+                    self._generate_single_embedding(chunk_input, embeddings)
+
+                    # Important: The embedding points to the SAME doc_id
+                    self._doc_ids.append(doc_id)
+
+        # Convert list of arrays to single stacked array
         embeddings_array = np.vstack(embeddings)
-        self._doc_ids = [doc_id for doc_id, _ in doc_items]
-
-        logger.info(f"Generated embeddings for {len(embeddings_array)} documents")
+        logger.info(
+            f"Generated {len(embeddings_array)} embeddings for {len(documents)} documents"
+        )
         return embeddings_array
+
+    def _generate_single_embedding(self, input_ids, embedding_list):
+        """Helper to run the model on a tensor."""
+        with torch.no_grad():
+            # SciNCL expects attention mask
+            attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
+
+            outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask)
+
+            # Use [CLS] token (index 0) for dense vector
+            cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            embedding_list.append(cls_emb)
 
     # TODO: verify if this is the best way to create the index
     def create_faiss_index(self, embeddings: np.ndarray, index_type: str = "flat"):
@@ -342,6 +378,8 @@ class SciNCLRetrieval:
     def retrieve_similar_documents(self, query: str, k: int):
         """
         Retrieve similar documents using FAISS.
+        With chunking, multiple chunks may map to the same document.
+        We group by document and take the best score.
 
         Args:
             query: Query text
@@ -353,7 +391,7 @@ class SciNCLRetrieval:
         if self.ingestion.faiss_index is None:
             raise ValueError("FAISS index not initialized")
 
-        # Encode the query as [CLS] embedding (title-only)
+        # Encode the query as [CLS] embedding
         inputs = self.ingestion.tokenizer(
             [query], padding=True, truncation=True, max_length=512, return_tensors="pt"
         ).to(self.ingestion.device)
@@ -365,14 +403,26 @@ class SciNCLRetrieval:
         # Normalize the embedding for cosine similarity
         faiss.normalize_L2(query_embedding)
 
-        # Search FAISS index for top-k results
-        scores, indices = self.ingestion.faiss_index.search(query_embedding, k)
+        # Search for more chunks to account for multiple chunks per document
+        # Search for k*3 chunks to ensure we get k unique documents
+        search_k = min(k * 3, self.ingestion.faiss_index.ntotal)
+        scores, indices = self.ingestion.faiss_index.search(query_embedding, search_k)
 
-        # Convert FAISS indices to document results
-        results: list[RetrievalResult] = []
+        # Group chunks by document ID and take the best score per document
+        doc_scores: dict[str, float] = {}
         for score, idx in zip(scores[0], indices[0]):
             doc_id = self.ingestion._doc_ids[idx]
+            # Keep the maximum score for each document
+            if doc_id not in doc_scores or score > doc_scores[doc_id]:
+                doc_scores[doc_id] = float(score)
+
+        # Sort by score and take top-k
+        sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)[:k]
+
+        # Convert to RetrievalResult objects
+        results: list[RetrievalResult] = []
+        for doc_id, score in sorted_docs:
             doc = self.documents[doc_id]
-            results.append(RetrievalResult(document=doc, sim_score=float(score)))
+            results.append(RetrievalResult(document=doc, sim_score=score))
 
         return results
