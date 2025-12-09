@@ -85,7 +85,7 @@ class SciNCLIngestion:
         )
 
         self.max_length = 512
-        self.stride = 384  # 512 - 128 overlap
+        self.overlap = 128
 
         logger.info("SciNCL model loaded successfully")
 
@@ -207,7 +207,6 @@ class SciNCLIngestion:
 
         sep = self.tokenizer.sep_token or "[SEP]"
         doc_items = list(documents.items())
-        overlap = max(self.max_length - self.stride, 0)
 
         # Collect all chunks for every document
         for doc_id, doc in tqdm(doc_items, desc="Chunking documents"):
@@ -218,7 +217,7 @@ class SciNCLIngestion:
                 padding="max_length",
                 truncation=True,
                 max_length=self.max_length,
-                stride=overlap,
+                stride=self.overlap,
                 return_overflowing_tokens=True,
                 return_tensors="pt",
             )
@@ -380,7 +379,9 @@ class SciNCLRetrieval:
         self.ingestion = ingestion_system
         self.documents = documents
 
-    def retrieve_similar_documents(self, query: str, k: int):
+    def retrieve_similar_documents(
+        self, query: str, k: int, oversample_factor: float = 5.0
+    ):
         """
         Retrieve similar documents using FAISS.
         With chunking, multiple chunks may map to the same document.
@@ -389,16 +390,31 @@ class SciNCLRetrieval:
         Args:
             query: Query text
             k: Number of documents to retrieve
+            oversample_factor: Multiplier to fetch extra chunks to improve deduping
 
         Returns:
             List of RetrievalResult objects
         """
         if self.ingestion.faiss_index is None:
             raise ValueError("FAISS index not initialized")
+        if self.ingestion._doc_ids is None:
+            raise ValueError("Document IDs for chunks not initialized")
+        if k <= 0:
+            raise ValueError("k must be positive")
+        if len(self.ingestion._doc_ids) != self.ingestion.faiss_index.ntotal:
+            raise ValueError("Mismatch between stored doc IDs and FAISS index size")
+
+        n_vectors = self.ingestion.faiss_index.ntotal
+        if n_vectors == 0:
+            return []
 
         # Encode the query as [CLS] embedding
         inputs = self.ingestion.tokenizer(
-            [query], padding=True, truncation=True, max_length=512, return_tensors="pt"
+            [query],
+            padding=True,
+            truncation=True,
+            max_length=self.ingestion.max_length,
+            return_tensors="pt",
         ).to(self.ingestion.device)
 
         with torch.no_grad():
@@ -408,14 +424,16 @@ class SciNCLRetrieval:
         # Normalize the embedding for cosine similarity
         faiss.normalize_L2(query_embedding)
 
-        # Search for more chunks to account for multiple chunks per document
-        # Search for k*3 chunks to ensure we get k unique documents
-        search_k = min(k * 3, self.ingestion.faiss_index.ntotal)
+        # Search for extra chunks to increase odds of k unique documents
+        target = int(np.ceil(k * max(oversample_factor, 1.0)))
+        search_k = min(max(target, k), n_vectors)
         scores, indices = self.ingestion.faiss_index.search(query_embedding, search_k)
 
         # Group chunks by document ID and take the best score per document
         doc_scores: dict[str, float] = {}
         for score, idx in zip(scores[0], indices[0]):
+            if idx < 0:
+                continue
             doc_id = self.ingestion._doc_ids[idx]
             # Keep the maximum score for each document
             if doc_id not in doc_scores or score > doc_scores[doc_id]:
@@ -427,7 +445,10 @@ class SciNCLRetrieval:
         # Convert to RetrievalResult objects
         results: list[RetrievalResult] = []
         for doc_id, score in sorted_docs:
-            doc = self.documents[doc_id]
+            doc = self.documents.get(doc_id)
+            if doc is None:
+                logger.warning(f"Document ID {doc_id} not found in store; skipping")
+                continue
             results.append(RetrievalResult(document=doc, sim_score=score))
 
         return results
