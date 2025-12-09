@@ -83,6 +83,10 @@ class SciNCLIngestion:
         self.base_model: AutoModel = AutoModel.from_pretrained(model_name).to(
             self.device
         )
+
+        self.max_length = 512
+        self.stride = 384  # 512 - 128 overlap
+
         logger.info("SciNCL model loaded successfully")
 
     def process_pubmed_data(self, csv_path: str):
@@ -179,85 +183,86 @@ class SciNCLIngestion:
         logger.info(f"Processed {len(documents)} Semantic Scholar documents")
         return documents
 
-    def generate_document_embeddings(self, documents: dict[str, Document]):
+    def generate_document_embeddings(
+        self, documents: dict[str, Document], batch_size: int = 16
+    ):
         """
         Generate document embeddings using Sliding Window chunking.
 
         Args:
             documents: dict of {doc_id: Document}
+            batch_size: Number of chunks to embed at once
 
         Returns:
             np.ndarray: Embeddings array for all document chunks (order follows input dict)
         """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+
         logger.info("Generating embeddings with Sliding Window strategy...")
 
-        # Map embedding indices back to Document IDs
         self._doc_ids = []
-        embeddings = []
-
-        # Stride parameters
-        MAX_LEN = 512
-        STRIDE = 384  # 512 - 128 overlap
+        all_input_ids: list[torch.Tensor] = []
+        all_attention_masks: list[torch.Tensor] = []
 
         sep = self.tokenizer.sep_token or "[SEP]"
         doc_items = list(documents.items())
+        overlap = max(self.max_length - self.stride, 0)
 
-        # We process one document at a time to handle its variable chunks
-        for doc_id, doc in tqdm(doc_items, desc="Chunking and Embedding"):
-
-            # 1. Create the full text
+        # Collect all chunks for every document
+        for doc_id, doc in tqdm(doc_items, desc="Chunking documents"):
             full_text = f"{doc.title}{sep}{doc.abstract}"
 
-            # 2. Tokenize without truncation first to get total length
-            tokens = self.tokenizer(
+            encodings = self.tokenizer(
                 full_text,
-                add_special_tokens=True,
+                padding="max_length",
+                truncation=True,
+                max_length=self.max_length,
+                stride=overlap,
+                return_overflowing_tokens=True,
                 return_tensors="pt",
-                return_attention_mask=False,  # We handle this manually
-            ).input_ids[0]  # Get the 1D tensor
+            )
 
-            total_tokens = tokens.size(0)
+            chunk_count = encodings.input_ids.size(0)
+            all_input_ids.extend([chunk for chunk in encodings.input_ids])
+            all_attention_masks.extend([mask for mask in encodings.attention_mask])
+            self._doc_ids.extend([doc_id] * chunk_count)
 
-            # 3. Sliding Window Loop
-            if total_tokens <= MAX_LEN:
-                # Case A: Fits in one chunk
-                chunk_input = tokens.unsqueeze(0).to(self.device)
-                self._generate_single_embedding(chunk_input, embeddings)
-                self._doc_ids.append(doc_id)
-            else:
-                # Case B: Needs chunking
-                for i in range(0, total_tokens, STRIDE):
-                    # Slice the tokens
-                    chunk = tokens[i : i + MAX_LEN]
+        if not all_input_ids:
+            logger.warning("No chunks found to embed; returning empty embeddings array")
+            return np.empty((0, self.base_model.config.hidden_size))
 
-                    # If the last chunk is too small (e.g. < 50 tokens),
-                    # you might opt to skip it or pad it.
-                    # BERT handles variable length, so we just process it.
+        # Embed chunks in batches
+        embeddings = []
+        for i in tqdm(
+            range(0, len(all_input_ids), batch_size), desc="Embedding chunks"
+        ):
+            batch_input_ids = torch.stack(all_input_ids[i : i + batch_size]).to(
+                self.device
+            )
+            batch_attention = torch.stack(all_attention_masks[i : i + batch_size]).to(
+                self.device
+            )
+            batch_embeddings = self._generate_batch_embeddings(
+                batch_input_ids, batch_attention
+            )
+            embeddings.append(batch_embeddings)
 
-                    chunk_input = chunk.unsqueeze(0).to(self.device)
-                    self._generate_single_embedding(chunk_input, embeddings)
-
-                    # Important: The embedding points to the SAME doc_id
-                    self._doc_ids.append(doc_id)
-
-        # Convert list of arrays to single stacked array
         embeddings_array = np.vstack(embeddings)
         logger.info(
             f"Generated {len(embeddings_array)} embeddings for {len(documents)} documents"
         )
         return embeddings_array
 
-    def _generate_single_embedding(self, input_ids, embedding_list):
-        """Helper to run the model on a tensor."""
+    def _generate_batch_embeddings(
+        self, input_ids_batch: torch.Tensor, attention_mask_batch: torch.Tensor
+    ):
+        """Helper to run the model on padded batches of chunk tensors."""
         with torch.no_grad():
-            # SciNCL expects attention mask
-            attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
-
-            outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask)
-
-            # Use [CLS] token (index 0) for dense vector
-            cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-            embedding_list.append(cls_emb)
+            outputs = self.base_model(
+                input_ids=input_ids_batch, attention_mask=attention_mask_batch
+            )
+        return outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
     # TODO: verify if this is the best way to create the index
     def create_faiss_index(self, embeddings: np.ndarray, index_type: str = "flat"):
