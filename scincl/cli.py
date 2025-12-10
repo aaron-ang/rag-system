@@ -33,7 +33,7 @@ def ingest_data(args):
             model_name=args.model,
             index_type=args.index,
             artifacts_dir=args.output_dir,
-            milvus_uri=None if args.lite else "http://localhost:19530",
+            milvus_uri="milvus.db" if args.lite else None,
         )
 
         print("Data ingestion completed successfully!")
@@ -49,7 +49,7 @@ def query_system(args):
     try:
         retrieval, documents = load_artifacts(
             artifacts_dir=args.artifacts_dir,
-            milvus_uri=None if args.lite else "http://localhost:19530",
+            milvus_uri="milvus.db" if args.lite else None,
         )
 
         print(f"System ready with {len(documents)} documents")
