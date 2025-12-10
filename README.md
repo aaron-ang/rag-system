@@ -7,7 +7,7 @@ A Retrieval-Augmented Generation system for medical research papers using [SciNC
 - **SciNCL Integration**: Uses the official SciNCL model for document embeddings
 - **Milvus Vector DB**: Milvus server with IVF index by default; Milvus Lite (flat) fallback available
 - **Multiple Data Sources**: PubMed abstracts and Semantic Scholar papers
-- **Smart Caching**: Automatic artifact caching with force re-ingestion option
+- **Smart Caching**: Automatic artifact caching
 - **Document Deduplication**: Automatic removal of duplicate documents by title
 - **CLI & Interactive**: Both command-line and interactive interfaces available
 
@@ -57,9 +57,6 @@ uv run -m scincl.cli ingest
 
 # Use Milvus Lite (v1 profile) instead
 uv run -m scincl.cli ingest --v1
-
-# Force re-ingestion (delete and rebuild artifacts)
-uv run -m scincl.cli ingest --force
 
 # Query the system
 uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5
@@ -132,10 +129,6 @@ for result in results:
 ### Artifact Caching
 - Ingestion automatically skips if artifacts already exist
 - Saves time on repeated runs
-- Use `--force` flag to re-ingest:
-  ```bash
-  uv run -m scincl.cli ingest --force
-  ```
 
 ### Document Deduplication
 - Documents are automatically deduplicated by title during ingestion
@@ -143,7 +136,7 @@ for result in results:
 - Check console output for deduplication statistics
 
 ### CLI Options
-- **Ingest command**: `uv run -m scincl.cli ingest [--force] [--model MODEL] [--output-dir DIR] [--v1]`
+- **Ingest command**: `uv run -m scincl.cli ingest [--model MODEL] [--output-dir DIR] [--v1]`
 - **Query command**: `uv run -m scincl.cli query QUERY [--k N] [--artifacts-dir DIR] [--v1]`
 - **Milvus**: server default is `http://localhost:19530` with IVF index; add `--v1` for local Milvus Lite (FLAT index).
 - **Help**: `uv run -m scincl.cli --help` or `uv run -m scincl.cli ingest --help`

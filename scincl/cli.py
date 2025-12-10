@@ -4,6 +4,7 @@ CLI interface for SciNCL-based RAG system.
 
 import argparse
 import os
+import shutil
 
 from scincl.utils import load_artifacts, create_artifacts
 
@@ -18,20 +19,7 @@ def ingest_data(args):
     use_sliding_window = not use_v1
 
     try:
-        # Check if artifacts exist and handle force flag
-        if (
-            os.path.exists(os.path.join(args.output_dir, "milvus.db"))
-            and not args.force
-            and use_v1
-        ):
-            print(f"Artifacts already exist in {args.output_dir}")
-            print("Skipping ingestion. Use --force to re-ingest:")
-            print("  uv run -m scincl.cli ingest --force")
-            return
-
-        if args.force and os.path.exists(args.output_dir):
-            import shutil
-
+        if os.path.exists(args.output_dir):
             print(f"Removing existing artifacts from {args.output_dir}...")
             shutil.rmtree(args.output_dir)
 
@@ -99,11 +87,6 @@ def main():
         "--v1",
         action="store_true",
         help="Use v1 profile: Milvus Lite with FLAT index (default is v2: Milvus server with IVF index)",
-    )
-    ingest_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Force re-ingestion even if artifacts exist",
     )
     ingest_parser.set_defaults(func=ingest_data)
 
