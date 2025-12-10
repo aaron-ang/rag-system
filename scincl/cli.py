@@ -58,7 +58,7 @@ def query_system(args):
         for i, result in enumerate(results, 1):
             doc = result.document
             print(f"\n{i}. {doc.title}")
-            print(f"   Score: {result.sim_score:.3f}")
+            print(f"   Score: {result.score:.3f}")
             print(f"   Source: {doc.source}")
             print(f"   Abstract: {str(doc.abstract)}")
 

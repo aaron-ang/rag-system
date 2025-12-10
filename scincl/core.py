@@ -562,13 +562,13 @@ class SciNCLIngestion:
 @dataclass
 class RetrievalChunk:
     document: Document
-    sim_score: float
+    score: float
     chunk_text: str | None = None
 
     def __post_init__(self):
         """Validate retrieval chunk."""
-        if not 0.0 <= self.sim_score <= 1.0:
-            logger.warning(f"Score {self.sim_score} outside expected range [0.0, 1.0]")
+        if not 0.0 <= self.score <= 1.0:
+            logger.warning(f"Score {self.score} outside expected range [0.0, 1.0]")
 
 
 @dataclass
@@ -692,7 +692,14 @@ class SciNCLRetrieval:
             if document is None:
                 logger.warning(f"Document ID {doc_id} not found in store; skipping")
                 return []
-            return [RetrievalChunk(document=document, sim_score=hit.get("distance"))]
+            score = 1.0 - (hit.get("distance", 2.0) / 2.0)
+            return [
+                RetrievalChunk(
+                    document=document,
+                    score=score,
+                    chunk_text=entity.get("chunk_text"),
+                )
+            ]
 
         if self.reranker is None:
             results = []
@@ -706,8 +713,13 @@ class SciNCLRetrieval:
                 if doc is None:
                     logger.warning(f"Document ID {doc_id} not found in store; skipping")
                     continue
+                score = 1.0 - (hit.get("distance", 2.0) / 2.0)
                 results.append(
-                    RetrievalChunk(document=doc, sim_score=hit.get("distance"))
+                    RetrievalChunk(
+                        document=doc,
+                        score=score,
+                        chunk_text=entity.get("chunk_text"),
+                    )
                 )
                 seen.add(doc_id)
                 if len(results) >= k:
@@ -753,7 +765,7 @@ class SciNCLRetrieval:
             results.append(
                 RetrievalChunk(
                     document=doc,
-                    sim_score=result.score,
+                    score=result.score,
                     chunk_text=result.text,
                 )
             )

@@ -142,14 +142,14 @@ def evaluate_retriever(retrieval: SciNCLRetrieval, k=10, use_v1=False):
             chunks = retrieval_result.retrieval_chunks
             if chunks:
                 retrieved_ids = [result.document.id for result in chunks]
-                retrieved_sim_scores = [result.sim_score for result in chunks]
+                retrieved_scores = [result.score for result in chunks]
             else:
                 retrieved_ids = []
-                retrieved_sim_scores = []
+                retrieved_scores = []
                 print("❌ No results found.")
 
             retrieved_docs.append(retrieved_ids)
-            retrieved_scores.append(retrieved_sim_scores)
+            retrieved_scores.append(retrieved_scores)
             ground_truth_docs.append(gt_doc_ids)
 
         except Exception as e:

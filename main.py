@@ -58,7 +58,7 @@ def interactive_query(retrieval: SciNCLRetrieval):
 
             for i, result in enumerate(results, 1):
                 doc = result.document
-                score = result.sim_score
+                score = result.score
                 title = doc.title
                 source = doc.source
                 abstract = doc.abstract
@@ -127,7 +127,7 @@ def demo_queries(retrieval: SciNCLRetrieval):
             for idx, result in enumerate(results, 1):
                 doc = result.document
                 title = doc.title
-                score = result.sim_score
+                score = result.score
                 source = doc.source
                 score_indicator = _score_indicator(score)
                 print(f"   📄 {idx}. {title}")
