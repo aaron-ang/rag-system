@@ -1,0 +1,11 @@
+query_id,query_text,target_paper_ids
+1,"What evidence identifies the major risk factors for hypoxaemia among children with pneumonia, and how common is this condition in pediatric cases?","11409574,11409576,11409575"
+2,"Which clinical signs have been shown to reliably indicate hypoxaemia in children with pneumonia when pulse oximetry is not available?","11409575,11409576,11409574"
+3,"How do oxygen concentrators compare with oxygen cylinders in terms of cost-effectiveness, operational reliability, and suitability for low-resource settings?","11409577,11409578,11409579"
+4,"What pulse oximetry monitoring protocols are associated with improved survival among hypoxaemic children, and what evidence supports their use?","11409576,11409574,11409575"
+5,"What trends demonstrate increasing resistance to ciprofloxacin and nalidixic acid in Salmonella Typhi and Paratyphi A, and what are the clinical implications?","11409582,11409583,11409580"
+6,"What are the key applications, limitations, and practical challenges described for using large language models in biomedical or clinical research workflows?","5062b5b11fa9a528a3ae31da099c51555b8c6a0f,06ea3b3c4680cc8939b830f0edf260a0d142d76a,2f0f6b4f25a25a0c748abd2a4c94a5a9f0df8f1f"
+7,"What major barriers and risks are associated with deploying LLMs in real-world healthcare settings, according to the cited studies?","06ea3b3c4680cc8939b830f0edf260a0d142d76a,5062b5b11fa9a528a3ae31da099c51555b8c6a0f,2f0f6b4f25a25a0c748abd2a4c94a5a9f0df8f1f"
+8,"What guidelines or best-practice recommendations do the documents provide for reporting evaluation results when using LLMs or AI systems in biomedical research?","f50be995ae7bc8b5889df68be77bf89d1d253a50,41c7b67f0a6e75a630bcb830cd585d87e8e19c89,69ad1ee3201d52fc47df92dd35435f03e8a9c1c9"
+9,"How are Quality Indicators (QIs) defined and used in the healthcare context described, and what role do they play in evaluating system performance?","200d750a98b0f8002a2818c15697669d0cece106,80f32b2e35e060ce804cf0a1b52fb32ab409b386,41c7b67f0a6e75a630bcb830cd585d87e8e19c89"
+10,"How does simulated microgravity affect cytotoxic T-cell activation pathways, and what mechanistic insights are reported in the referenced studies?","11409588,11409590,11409592"

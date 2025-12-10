@@ -11,12 +11,18 @@ from scincl.utils import load_artifacts, create_artifacts
 def ingest_data(args):
     print("Starting SciNCL data ingestion...")
 
+    # v1: Milvus Lite + FLAT index; v2: Milvus server + IVF index (default)
+    use_v1 = args.v1
+    index_type = "flat" if use_v1 else "ivf"
+    milvus_path = "milvus.db" if use_v1 else None
+    use_sliding_window = not use_v1
+
     try:
         # Check if artifacts exist and handle force flag
         if (
             os.path.exists(os.path.join(args.output_dir, "milvus.db"))
             and not args.force
-            and args.lite
+            and use_v1
         ):
             print(f"Artifacts already exist in {args.output_dir}")
             print("Skipping ingestion. Use --force to re-ingest:")
@@ -31,9 +37,10 @@ def ingest_data(args):
 
         create_artifacts(
             model_name=args.model,
-            index_type=args.index,
+            index_type=index_type,
             artifacts_dir=args.output_dir,
-            milvus_uri="milvus.db" if args.lite else None,
+            milvus_path=milvus_path,
+            use_sliding_window=use_sliding_window,
         )
 
         print("Data ingestion completed successfully!")
@@ -44,12 +51,15 @@ def ingest_data(args):
 
 
 def query_system(args):
+    use_v1 = args.v1
+    milvus_path = "milvus.db" if use_v1 else None
+
     print(f"Loading artifacts from {args.artifacts_dir}...")
 
     try:
         retrieval, documents = load_artifacts(
             artifacts_dir=args.artifacts_dir,
-            milvus_uri="milvus.db" if args.lite else None,
+            milvus_path=milvus_path,
         )
 
         print(f"System ready with {len(documents)} documents")
@@ -81,20 +91,14 @@ def main():
         "--model", default="malteos/scincl", help="SciNCL model name"
     )
     ingest_parser.add_argument(
-        "--index",
-        default="flat",
-        choices=["flat", "ivf", "hnsw"],
-        help="Milvus index (IVF/HNSW require non-Lite Milvus)",
-    )
-    ingest_parser.add_argument(
         "--output-dir",
         default="data/scincl_artifacts",
         help="Output directory for artifacts",
     )
     ingest_parser.add_argument(
-        "--lite",
+        "--v1",
         action="store_true",
-        help="Use Milvus Lite (local milvus.db). Default is Milvus server at http://localhost:19530",
+        help="Use v1 profile: Milvus Lite with FLAT index (default is v2: Milvus server with IVF index)",
     )
     ingest_parser.add_argument(
         "--force",
@@ -112,9 +116,9 @@ def main():
         help="Directory containing artifacts",
     )
     query_parser.add_argument(
-        "--lite",
+        "--v1",
         action="store_true",
-        help="Use Milvus Lite (local milvus.db). Default is Milvus server at http://localhost:19530",
+        help="Use v1 profile: Milvus Lite with FLAT index (default is v2: Milvus server with IVF index)",
     )
     query_parser.add_argument(
         "--k", type=int, default=5, help="Number of documents to retrieve"

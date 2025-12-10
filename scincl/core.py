@@ -192,14 +192,18 @@ class SciNCLIngestion:
         return documents
 
     def generate_document_embeddings(
-        self, documents: dict[str, Document], batch_size: int = 16
+        self,
+        documents: dict[str, Document],
+        use_sliding_window: bool,
+        batch_size: int = 16,
     ):
         """
-        Generate document embeddings using Sliding Window chunking.
+        Generate document embeddings.
 
         Args:
             documents: dict of {doc_id: Document}
             batch_size: Number of chunks to embed at once
+            use_sliding_window: When True, use sliding-window chunking; when False, embed full documents.
 
         Returns:
             np.ndarray: Embeddings array for all document chunks (order follows input dict)
@@ -207,7 +211,11 @@ class SciNCLIngestion:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
 
-        logger.info("Generating embeddings with Sliding Window strategy...")
+        logger.info(
+            "Generating embeddings with Sliding Window strategy..."
+            if use_sliding_window
+            else "Generating embeddings without chunking (full documents)..."
+        )
 
         self._doc_ids = []
         self._chunk_texts = []
@@ -217,31 +225,42 @@ class SciNCLIngestion:
         sep = self.tokenizer.sep_token or "[SEP]"
         doc_items = list(documents.items())
 
-        # Collect all chunks for every document
-        for doc_id, doc in tqdm(doc_items, desc="Chunking documents"):
+        for doc_id, doc in tqdm(doc_items, desc="Preparing document inputs"):
             full_text = f"{doc.title}{sep}{doc.abstract}"
 
-            encodings = self.tokenizer(
-                full_text,
-                padding="max_length",
-                truncation=True,
-                max_length=self.max_length,
-                stride=self.overlap,
-                return_overflowing_tokens=True,
-                return_tensors="pt",
-            )
+            if use_sliding_window:
+                encodings = self.tokenizer(
+                    full_text,
+                    padding="max_length",
+                    truncation=True,
+                    max_length=self.max_length,
+                    stride=self.overlap,
+                    return_overflowing_tokens=True,
+                    return_tensors="pt",
+                )
 
-            chunk_count = encodings.input_ids.size(0)
-            all_input_ids.extend([chunk for chunk in encodings.input_ids])
-            all_attention_masks.extend([mask for mask in encodings.attention_mask])
-            self._doc_ids.extend([doc_id] * chunk_count)
+                chunk_count = encodings.input_ids.size(0)
+                all_input_ids.extend([chunk for chunk in encodings.input_ids])
+                all_attention_masks.extend([mask for mask in encodings.attention_mask])
+                self._doc_ids.extend([doc_id] * chunk_count)
 
-            chunk_texts = self.tokenizer.batch_decode(
-                encodings.input_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-            )
-            self._chunk_texts.extend(chunk_texts)
+                chunk_texts = self.tokenizer.batch_decode(
+                    encodings.input_ids,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True,
+                )
+                self._chunk_texts.extend(chunk_texts)
+            else:
+                encodings = self.tokenizer(
+                    full_text,
+                    padding=True,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                all_input_ids.append(encodings.input_ids.squeeze(0))
+                all_attention_masks.append(encodings.attention_mask.squeeze(0))
+                self._doc_ids.append(doc_id)
+                self._chunk_texts.append(full_text)
 
         if not all_input_ids:
             logger.warning("No chunks found to embed; returning empty embeddings array")
@@ -288,7 +307,7 @@ class SciNCLIngestion:
         """
         Args:
             embeddings: Document embeddings array
-            index_type: Index type to create (only 'flat' is supported)
+            index_type: Index type to create ('flat' for Lite; 'flat', 'ivf', or 'hnsw' for server)
         """
         if embeddings.size == 0:
             raise ValueError("No embeddings provided to index")

@@ -1,6 +1,6 @@
 """
 Unified evaluation script for all RAG backends.
-Supports SciNCL+Milvus Lite, Qdrant+SentenceTransformer, and Qdrant+TF-IDF.
+Supports SciNCL+Milvus (server IVF / v1 Lite FLAT), Qdrant+SentenceTransformer, and Qdrant+TF-IDF.
 """
 
 import argparse
@@ -114,11 +114,14 @@ def mrr_at_k(
     return round(sum(reciprocal_ranks) / len(reciprocal_ranks), 3)
 
 
-def evaluate_retriever(retrieval: SciNCLRetrieval, k=10):
+def evaluate_retriever(retrieval: SciNCLRetrieval, k=10, use_v1=False):
     """
     Evaluates the retrieval system on a test set of queries.
     """
-    df = pd.read_csv("eval/retrieval_queries.csv")
+    queries_file = (
+        "eval/retrieval_queries_v1.csv" if use_v1 else "eval/retrieval_queries.csv"
+    )
+    df = pd.read_csv(queries_file)
 
     retrieved_docs = []
     retrieved_scores = []
@@ -311,29 +314,32 @@ def main():
         help='Choose backend to evaluate (default: scincl). Use "all" to test all backends.',
     )
     parser.add_argument(
-        "--lite",
+        "--v1",
         action="store_true",
-        help="Use Milvus Lite (local milvus.db) for the SciNCL backend; default is Milvus server at http://localhost:19530",
+        help="Use v1 profile: Milvus Lite (local milvus.db) with FLAT index and full-document embeddings",
     )
     parser.add_argument(
         "-k", type=int, default=10, help="Number of documents to retrieve (default: 10)"
     )
 
     args = parser.parse_args()
+    use_v1 = args.v1
 
     if args.backend == "scincl" or args.backend == "all":
         print("\n" + "=" * 80)
         print(
             "EVALUATING: SciNCL + Milvus "
-            + ("Lite" if args.lite else "Server")
+            + (
+                "Lite (v1, FLAT, full-document embeddings)"
+                if use_v1
+                else "Server (IVF, sliding-window)"
+            )
             + " Backend"
         )
         print("=" * 80)
         try:
-            retrieval = load_or_create_artifacts(
-                milvus_uri=None if args.lite else "http://localhost:19530"
-            )
-            evaluate_retriever(retrieval, k=args.k)
+            retrieval = load_or_create_artifacts(use_v1=use_v1)
+            evaluate_retriever(retrieval, k=args.k, use_v1=use_v1)
         except Exception as e:
             print(f"❌ Failed to evaluate SciNCL backend: {e}")
             if args.backend == "scincl":

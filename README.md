@@ -5,7 +5,7 @@ A Retrieval-Augmented Generation system for medical research papers using [SciNC
 ## Features
 
 - **SciNCL Integration**: Uses the official SciNCL model for document embeddings
-- **Milvus Vector DB**: Local Milvus server by default, with optional IVF/HNSW index types
+- **Milvus Vector DB**: Milvus server with IVF index by default; Milvus Lite (flat) fallback available
 - **Multiple Data Sources**: PubMed abstracts and Semantic Scholar papers
 - **Smart Caching**: Automatic artifact caching with force re-ingestion option
 - **Document Deduplication**: Automatic removal of duplicate documents by title
@@ -45,18 +45,18 @@ uv run main.py
 ```
 
 ### Milvus Server (default) vs Lite
-- Server (default): connects to `http://localhost:19530`. Start Milvus via Docker (see below).
-- Lite: add `--lite` to CLI commands for embedded Milvus Lite (local `milvus.db`).
+- Server (default, "v2" profile): connects to `http://localhost:19530` using an IVF index. Start Milvus via Docker (see below).
+- Lite ("v1" profile): add `--v1` to CLI commands for embedded Milvus Lite (local `milvus.db`, FLAT index, full-document embeddings without sliding window).
 
 ### CLI Interface
 
 **Examples:**
 ```bash
-# Ingest all data using SciNCL (Milvus server default: http://localhost:19530)
+# Ingest all data using SciNCL (default: Milvus server IVF at http://localhost:19530)
 uv run -m scincl.cli ingest
 
-# Use Milvus Lite instead
-uv run -m scincl.cli ingest --lite
+# Use Milvus Lite (v1 profile) instead
+uv run -m scincl.cli ingest --v1
 
 # Force re-ingestion (delete and rebuild artifacts)
 uv run -m scincl.cli ingest --force
@@ -65,7 +65,7 @@ uv run -m scincl.cli ingest --force
 uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5
 
 # Query against Milvus Lite
-uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5 --lite
+uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5 --v1
 
 # Query with more results
 uv run -m scincl.cli query "tuberculosis treatment" --k 10
@@ -143,9 +143,9 @@ for result in results:
 - Check console output for deduplication statistics
 
 ### CLI Options
-- **Ingest command**: `uv run -m scincl.cli ingest [--force] [--model MODEL] [--index TYPE] [--output-dir DIR] [--lite]`
-- **Query command**: `uv run -m scincl.cli query QUERY [--k N] [--artifacts-dir DIR] [--lite]`
-- **Milvus**: server default is `http://localhost:19530`; use `--lite` for local Milvus Lite. IVF/HNSW require server mode.
+- **Ingest command**: `uv run -m scincl.cli ingest [--force] [--model MODEL] [--output-dir DIR] [--v1]`
+- **Query command**: `uv run -m scincl.cli query QUERY [--k N] [--artifacts-dir DIR] [--v1]`
+- **Milvus**: server default is `http://localhost:19530` with IVF index; add `--v1` for local Milvus Lite (FLAT index).
 - **Help**: `uv run -m scincl.cli --help` or `uv run -m scincl.cli ingest --help`
 
 ## SciNCL Methodology
@@ -154,7 +154,7 @@ This implementation uses the [SciNCL model](https://huggingface.co/malteos/scinc
 
 1. **Scientific Document Embeddings**: Specialized embeddings for scientific papers
 2. **Title-Abstract Concatenation**: Combines title and abstract with [SEP] token
-3. **Milvus Integration**: Efficient cosine search via Milvus Lite (flat) or Milvus server (IVF/HNSW)
+3. **Milvus Integration**: Efficient cosine search via Milvus Lite (FLAT) or Milvus server (IVF)
 4. **Cosine Similarity**: Uses normalized embeddings for accurate similarity matching
 
 ## Evaluation
@@ -163,8 +163,8 @@ This implementation uses the [SciNCL model](https://huggingface.co/malteos/scinc
 # Default (SciNCL + Milvus server at localhost:19530)
 uv run -m eval.benchmark
 
-# Run against Milvus Lite artifacts
-uv run -m eval.benchmark --lite
+# Run against Milvus Lite artifacts (v1 profile; full-document embeddings)
+uv run -m eval.benchmark --v1
 
 # Specific backend: scincl | qdrant_st | qdrant_tfidf | all
 uv run -m eval.benchmark --backend all -k 10
@@ -190,8 +190,8 @@ python -m qdrant.cli
 ```
 
 **When to use:**
-- **SciNCL + Milvus Lite**: Local/dev, fast setup, flat index
-- **SciNCL + Milvus Server**: Larger corpora; enable IVF/HNSW via `--index ivf|hnsw` (server mode)
+- **SciNCL + Milvus Lite (v1)**: Local/dev, fast setup, flat index
+- **SciNCL + Milvus Server (v2 default)**: Larger corpora; IVF index; requires Milvus server at `http://localhost:19530`
 - **Qdrant+ST**: Production, persistent storage, scalable
 - **Qdrant+TF-IDF**: Baselines, prototyping, CPU-only
 

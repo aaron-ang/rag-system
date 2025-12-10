@@ -2,6 +2,7 @@
 Main RAG system application.
 """
 
+import argparse
 import textwrap
 
 from scincl import SciNCLRetrieval, load_or_create_artifacts
@@ -137,20 +138,43 @@ def _score_indicator(score: float):
 
 def main():
     """Main application entry point with enhanced formatting."""
+    parser = argparse.ArgumentParser(description="SciNCL-based RAG system")
+    parser.add_argument(
+        "--v1",
+        action="store_true",
+        help="Use v1 profile: Milvus Lite (local milvus.db), FLAT index, full-document embeddings. Default is v2 server with IVF and sliding-window.",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run demo queries only (no interactive prompt)",
+    )
+    args = parser.parse_args()
+
+    use_v1 = args.v1
+    profile_label = (
+        "v1 (Milvus Lite, FLAT, full-document embeddings)"
+        if use_v1
+        else "v2 (Milvus server, IVF, sliding-window)"
+    )
+
     print("\n" + "=" * 60)
     print("🤖 SciNCL-based RAG System")
     print("=" * 60)
     print("📚 Medical Research Paper Retrieval System")
     print("=" * 60)
+    print(f"🎛️ Profile: {profile_label}")
+    print(f"🧪 Mode: {'Demo only' if args.demo else 'Demo + Interactive'}")
 
     try:
-        retrieval = load_or_create_artifacts()
+        retrieval = load_or_create_artifacts(use_v1=use_v1)
 
-        print("\n🎯 Running demo queries...")
-        demo_queries(retrieval)
-
-        print("\n🚀 Starting interactive mode...")
-        interactive_query(retrieval)
+        if args.demo:
+            print("\n🎯 Running demo queries...")
+            demo_queries(retrieval)
+        else:
+            print("\n🚀 Starting interactive mode...")
+            interactive_query(retrieval)
 
     except Exception as e:
         print(f"\n❌ Error: {e}")
