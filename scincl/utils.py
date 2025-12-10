@@ -10,7 +10,9 @@ from typing import Callable
 from scincl.core import SciNCLIngestion, SciNCLRetrieval, Document
 
 
-def load_or_create_artifacts(artifacts_dir="data/scincl_artifacts"):
+def load_or_create_artifacts(
+    artifacts_dir="data/scincl_artifacts", milvus_uri: str | None = None
+):
     """
     Load existing artifacts or create new ones if they don't exist.
 
@@ -19,18 +21,22 @@ def load_or_create_artifacts(artifacts_dir="data/scincl_artifacts"):
     """
     try:
         print("🔄 Loading existing artifacts...")
-        retrieval, documents = load_artifacts(artifacts_dir)
+        retrieval, documents = load_artifacts(artifacts_dir, milvus_uri=milvus_uri)
     except (FileNotFoundError, ValueError):
         print("⚠️  No existing artifacts found. Creating new ones...")
         print("⏳ This may take some time...")
-        create_artifacts(artifacts_dir=artifacts_dir)
-        retrieval, documents = load_artifacts(artifacts_dir=artifacts_dir)
+        create_artifacts(artifacts_dir=artifacts_dir, milvus_uri=milvus_uri)
+        retrieval, documents = load_artifacts(
+            artifacts_dir=artifacts_dir, milvus_uri=milvus_uri
+        )
 
     print(f"✅ System ready with {len(documents)} documents")
     return retrieval
 
 
-def load_artifacts(artifacts_dir="data/scincl_artifacts"):
+def load_artifacts(
+    artifacts_dir="data/scincl_artifacts", milvus_uri: str | None = None
+):
     """
     Load existing artifacts from disk.
 
@@ -47,10 +53,9 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
     if not os.path.exists(artifacts_dir):
         raise FileNotFoundError(f"Artifacts directory not found: {artifacts_dir}")
 
-    required_files = [
-        "milvus.db",
-        "documents.json",
-    ]
+    required_files = ["documents.json"]
+    if milvus_uri is None or SciNCLIngestion._is_lite_uri(milvus_uri):
+        required_files.append("milvus.db")
     missing_files = [
         f for f in required_files if not os.path.exists(os.path.join(artifacts_dir, f))
     ]
@@ -61,7 +66,7 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
     print("Loading existing artifacts...")
 
     ingestion = SciNCLIngestion()
-    ingestion.load_collection(os.path.join(artifacts_dir, "milvus.db"))
+    ingestion.load_collection(milvus_uri or os.path.join(artifacts_dir, "milvus.db"))
 
     with open(os.path.join(artifacts_dir, "documents.json"), "r") as f:
         documents_list = json.load(f)
@@ -78,6 +83,7 @@ def create_artifacts(
     model_name="malteos/scincl",
     index_type="flat",
     artifacts_dir="data/scincl_artifacts",
+    milvus_uri: str | None = None,
 ):
     """
     Create new artifacts from raw data.
@@ -135,7 +141,7 @@ def create_artifacts(
     ingestion.create_index(
         embeddings,
         index_type=index_type,
-        db_path=os.path.join(artifacts_dir, "milvus.db"),
+        db_path=milvus_uri or os.path.join(artifacts_dir, "milvus.db"),
     )
 
     # Save documents as a JSON list

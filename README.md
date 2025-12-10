@@ -5,7 +5,7 @@ A Retrieval-Augmented Generation system for medical research papers using [SciNC
 ## Features
 
 - **SciNCL Integration**: Uses the official SciNCL model for document embeddings
-- **Milvus Lite Indexing**: Local flat vector search with Milvus Lite
+- **Milvus Vector DB**: Local Milvus server by default, with optional IVF/HNSW index types
 - **Multiple Data Sources**: PubMed abstracts and Semantic Scholar papers
 - **Smart Caching**: Automatic artifact caching with force re-ingestion option
 - **Document Deduplication**: Automatic removal of duplicate documents by title
@@ -44,12 +44,19 @@ uv sync && uv run download.py && uv run main.py
 uv run main.py
 ```
 
+### Milvus Server (default) vs Lite
+- Server (default): connects to `http://localhost:19530`. Start Milvus via Docker (see below).
+- Lite: add `--lite` to CLI commands for embedded Milvus Lite (local `milvus.db`).
+
 ### CLI Interface
 
 **Examples:**
 ```bash
-# Ingest all data using SciNCL
+# Ingest all data using SciNCL (Milvus server default: http://localhost:19530)
 uv run -m scincl.cli ingest
+
+# Use Milvus Lite instead
+uv run -m scincl.cli ingest --lite
 
 # Force re-ingestion (delete and rebuild artifacts)
 uv run -m scincl.cli ingest --force
@@ -57,8 +64,23 @@ uv run -m scincl.cli ingest --force
 # Query the system
 uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5
 
+# Query against Milvus Lite
+uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5 --lite
+
 # Query with more results
 uv run -m scincl.cli query "tuberculosis treatment" --k 10
+```
+
+### Start/Stop Milvus Server (Docker, standalone)
+```bash
+# OR using the bundled helper script
+bash standalone_embed.sh start
+
+# Check health
+curl -f http://localhost:9091/healthz
+
+# Stop Milvus
+bash standalone_embed.sh stop
 ```
 
 ### Programmatic Usage
@@ -121,8 +143,9 @@ for result in results:
 - Check console output for deduplication statistics
 
 ### CLI Options
-- **Ingest command**: `python -m scincl.cli ingest [--force] [--model MODEL] [--index-type TYPE] [--output-dir DIR]`
-- **Query command**: `python -m scincl.cli query QUERY [--k N] [--artifacts-dir DIR]`
+- **Ingest command**: `python -m scincl.cli ingest [--force] [--model MODEL] [--index TYPE] [--output-dir DIR] [--lite]`
+- **Query command**: `python -m scincl.cli query QUERY [--k N] [--artifacts-dir DIR] [--lite]`
+- **Milvus**: server default is `http://localhost:19530`; use `--lite` for local Milvus Lite. IVF/HNSW require server mode.
 - **Help**: `python -m scincl.cli --help` or `python -m scincl.cli ingest --help`
 
 ## SciNCL Methodology
@@ -131,14 +154,17 @@ This implementation uses the [SciNCL model](https://huggingface.co/malteos/scinc
 
 1. **Scientific Document Embeddings**: Specialized embeddings for scientific papers
 2. **Title-Abstract Concatenation**: Combines title and abstract with [SEP] token
-3. **Milvus Lite Integration**: Efficient local cosine search with a flat index
+3. **Milvus Integration**: Efficient cosine search via Milvus Lite (flat) or Milvus server (IVF/HNSW)
 4. **Cosine Similarity**: Uses normalized embeddings for accurate similarity matching
 
 ## Evaluation
 
 ```bash
-# Default (SciNCL + Milvus Lite)
+# Default (SciNCL + Milvus server at localhost:19530)
 uv run -m eval.benchmark
+
+# Run against Milvus Lite artifacts
+uv run -m eval.benchmark --lite
 
 # Specific backend: scincl | qdrant_st | qdrant_tfidf | all
 uv run -m eval.benchmark --backend all -k 10
@@ -164,7 +190,8 @@ python -m qdrant.cli
 ```
 
 **When to use:**
-- **SciNCL + Milvus Lite**: Research, benchmarks, official methodology
+- **SciNCL + Milvus Lite**: Local/dev, fast setup, flat index
+- **SciNCL + Milvus Server**: Larger corpora; enable IVF/HNSW via `--index ivf|hnsw` (server mode)
 - **Qdrant+ST**: Production, persistent storage, scalable
 - **Qdrant+TF-IDF**: Baselines, prototyping, CPU-only
 

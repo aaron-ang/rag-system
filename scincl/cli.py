@@ -16,6 +16,7 @@ def ingest_data(args):
         if (
             os.path.exists(os.path.join(args.output_dir, "milvus.db"))
             and not args.force
+            and args.lite
         ):
             print(f"Artifacts already exist in {args.output_dir}")
             print("Skipping ingestion. Use --force to re-ingest:")
@@ -30,8 +31,9 @@ def ingest_data(args):
 
         create_artifacts(
             model_name=args.model,
-            index_type=args.index_type,
+            index_type=args.index,
             artifacts_dir=args.output_dir,
+            milvus_uri=None if args.lite else "http://localhost:19530",
         )
 
         print("Data ingestion completed successfully!")
@@ -45,7 +47,10 @@ def query_system(args):
     print(f"Loading artifacts from {args.artifacts_dir}...")
 
     try:
-        retrieval, documents = load_artifacts(artifacts_dir=args.artifacts_dir)
+        retrieval, documents = load_artifacts(
+            artifacts_dir=args.artifacts_dir,
+            milvus_uri=None if args.lite else "http://localhost:19530",
+        )
 
         print(f"System ready with {len(documents)} documents")
 
@@ -76,15 +81,20 @@ def main():
         "--model", default="malteos/scincl", help="SciNCL model name"
     )
     ingest_parser.add_argument(
-        "--index-type",
+        "--index",
         default="flat",
-        choices=["flat"],
-        help="Index type",
+        choices=["flat", "ivf", "hnsw"],
+        help="Milvus index (IVF/HNSW require non-Lite Milvus)",
     )
     ingest_parser.add_argument(
         "--output-dir",
         default="data/scincl_artifacts",
         help="Output directory for artifacts",
+    )
+    ingest_parser.add_argument(
+        "--lite",
+        action="store_true",
+        help="Use Milvus Lite (local milvus.db). Default is Milvus server at http://localhost:19530",
     )
     ingest_parser.add_argument(
         "--force",
@@ -100,6 +110,11 @@ def main():
         "--artifacts-dir",
         default="data/scincl_artifacts",
         help="Directory containing artifacts",
+    )
+    query_parser.add_argument(
+        "--lite",
+        action="store_true",
+        help="Use Milvus Lite (local milvus.db). Default is Milvus server at http://localhost:19530",
     )
     query_parser.add_argument(
         "--k", type=int, default=5, help="Number of documents to retrieve"

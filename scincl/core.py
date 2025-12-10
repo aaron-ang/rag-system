@@ -6,6 +6,7 @@ import ast
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, asdict
 
 import torch
@@ -82,10 +83,11 @@ class SciNCLIngestion:
         )
         self.base_model.eval()
 
-        self.db_path: str | None = None
-        self.collection: MilvusClient | None = None
+        self.client: MilvusClient | None = None
         self.collection_name = "scincl_chunks"
         self.vector_field_name = "vector"
+        self.index_name = "scincl_index"
+        self.search_params: dict = {}
 
         self.max_length = 512
         self.overlap = 128
@@ -290,7 +292,9 @@ class SciNCLIngestion:
         if embeddings.size == 0:
             raise ValueError("No embeddings provided to index")
 
-        if index_type.lower() != "flat":
+        db_path = db_path or "milvus.db"
+        is_lite = self._is_lite_uri(db_path)
+        if is_lite and index_type.lower() != "flat":
             raise ValueError("Milvus Lite backend currently supports only 'flat' index")
 
         if self._doc_ids is None or self._chunk_texts is None:
@@ -301,28 +305,36 @@ class SciNCLIngestion:
         ):
             raise ValueError("Mismatch between embeddings and stored chunk metadata")
 
-        self.db_path = db_path or "milvus.db"
-        db_dir = os.path.dirname(self.db_path)
-        if db_dir:
+        normalized_index_type = index_type.lower()
+        db_dir = os.path.dirname(db_path)
+        if is_lite:
             os.makedirs(db_dir, exist_ok=True)
-        logger.info(f"Creating collection '{self.collection_name}' at {self.db_path}")
-        self.collection = MilvusClient(self.db_path)
 
-        if self.collection.has_collection(self.collection_name):
+        logger.info(f"Creating collection '{self.collection_name}' at {db_path}")
+        self.client = MilvusClient(uri=db_path)
+
+        if self.client.has_collection(self.collection_name):
             logger.info("Existing collection found; dropping before recreation")
-            self.collection.drop_collection(self.collection_name)
+            self.client.drop_collection(self.collection_name)
 
-        index_params = self.collection.prepare_index_params()
+        index_params = self.client.prepare_index_params()
+        index_type, index_kwargs, search_kwargs = self._resolve_index_params(
+            index_type=normalized_index_type,
+            total_vectors=len(embeddings),
+            is_lite=is_lite,
+        )
         index_params.add_index(
             field_name=self.vector_field_name,
-            index_type="FLAT",
+            index_type=index_type,
+            index_name=self.index_name,
             metric_type="COSINE",
+            params=index_kwargs,
         )
+        self.search_params = search_kwargs
 
-        self.collection.create_collection(
+        self.client.create_collection(
             collection_name=self.collection_name,
             dimension=embeddings.shape[1],
-            metric_type="COSINE",
             auto_id=True,
             index_params=index_params,
         )
@@ -338,40 +350,91 @@ class SciNCLIngestion:
                 self._doc_ids, self._chunk_texts, embeddings
             )
         ]
-        self.collection.insert(self.collection_name, records)
+        self.client.insert(self.collection_name, records)
+        self.client.flush(self.collection_name)
 
         logger.info(f"Collection ready with {len(embeddings)} vectors")
 
     def load_collection(self, db_path: str | None = None):
         """
-        Attach to an existing Milvus Lite database and load the collection.
+        Attach to an existing Milvus database (Lite or server) and load the collection.
         """
-        path = db_path or self.db_path
+        path = db_path or "milvus.db"
         if path is None:
             raise ValueError("Milvus database path is not set")
-        if not os.path.exists(path):
+
+        is_lite = self._is_lite_uri(path)
+        if is_lite and not os.path.exists(path):
             raise FileNotFoundError(f"Milvus database not found at {path}")
 
-        self.db_path = path
-        self.collection = MilvusClient(path)
-        if not self.collection.has_collection(self.collection_name):
-            raise ValueError(
-                f"Collection '{self.collection_name}' missing in {self.db_path}"
-            )
-        self.collection.load_collection(self.collection_name)
+        self.client = MilvusClient(uri=path)
+        if not self.client.has_collection(self.collection_name):
+            raise ValueError(f"Collection '{self.collection_name}' missing in {path}")
+        self.client.load_collection(self.collection_name)
+
+        index_type = self._get_index_from_collection()
+        _, _, search_kwargs = self._resolve_index_params(
+            index_type,
+            total_vectors=self.get_vector_count(),
+            is_lite=is_lite,
+        )
+        self.search_params = search_kwargs
 
     def get_vector_count(self):
         """Return number of vectors stored in the collection."""
         if self._doc_ids is not None:
             return len(self._doc_ids)
-        if self.collection is None or self.collection_name is None:
+        if self.client is None or self.collection_name is None:
             return 0
         try:
-            stats = self.collection.get_collection_stats(self.collection_name)
+            stats = self.client.get_collection_stats(self.collection_name)
             return int(stats.get("row_count", 0))
         except Exception as exc:
             logger.warning(f"Could not fetch collection stats: {exc}")
             return 0
+
+    @staticmethod
+    def _is_lite_uri(uri: str) -> bool:
+        """Heuristic to decide if the target is Milvus Lite (file-backed)."""
+        return uri.endswith(".db") or uri.startswith("file:")
+
+    def _resolve_index_params(self, index_type: str, total_vectors: int, is_lite: bool):
+        """
+        Map friendly index types to Milvus index params and default search params.
+        """
+        index_type = index_type.lower()
+        if is_lite and index_type != "flat":
+            raise ValueError("Milvus Lite only supports 'flat' index type")
+
+        if index_type == "flat":
+            return "FLAT", {}, {}
+
+        if index_type == "ivf_flat":
+            sqrt_n = max(1, int(total_vectors**0.5))
+            nlist = min(max(4 * sqrt_n, 1), max(total_vectors, 1))
+            search_params = {
+                "params": {"nprobe": min(32, nlist)},
+            }
+            return "IVF_FLAT", {"nlist": nlist}, search_params
+
+        if index_type == "hnsw":
+            search_params = {"params": {"ef": 64}}
+            return "HNSW", {"M": 16, "efConstruction": 200}, search_params
+
+        raise ValueError(f"Unsupported index type: {index_type}")
+
+    def _get_index_from_collection(self):
+        if self.client is None:
+            raise ValueError("Client not initialized")
+
+        index_info = self.client.describe_index(
+            collection_name=self.collection_name, index_name=self.index_name
+        )
+
+        if not index_info:
+            return "flat"
+
+        return index_info["index_type"]
 
 
 @dataclass
@@ -421,7 +484,7 @@ class SciNCLRetrieval:
             query: Query text
             k: Number of documents to retrieve
         """
-        if self.ingestion.collection is None:
+        if self.ingestion.client is None:
             raise ValueError("Collection not loaded")
 
         if k <= 0:
@@ -445,16 +508,22 @@ class SciNCLRetrieval:
             query_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
         # Search for extra chunks to increase odds of k unique documents
-        oversample_factor = n_vectors / len(self.documents)
+        oversample_factor = n_vectors / max(len(self.documents), 1)
         target = int(np.ceil(k * max(oversample_factor, 1.0)))
         search_k = min(max(target, k), n_vectors)
-        search_results = self.ingestion.collection.search(
+        
+        search_start = time.perf_counter()
+        search_results = self.ingestion.client.search(
             collection_name=self.ingestion.collection_name,
             data=query_embedding.tolist(),
             anns_field=self.ingestion.vector_field_name,
             limit=search_k,
+            search_params=self.ingestion.search_params,
             output_fields=["doc_id", "chunk_text"],
         )
+        search_end = time.perf_counter()
+        logger.info(f"Search time: {search_end - search_start:.2f} seconds")
+
         if not search_results:
             return []
 
@@ -474,8 +543,10 @@ class SciNCLRetrieval:
         if not chunk_hits:
             return []
 
+        rerank_start = time.perf_counter()
         rerank_results = self.reranker(query, list(chunk_hits.keys()))
-
+        rerank_end = time.perf_counter()
+        logger.info(f"Rerank time: {rerank_end - rerank_start:.2f} seconds")
         # reranked results are already sorted by score
         # so we can choose the highest score for each document
         results: dict[str, RetrievalResult] = {}
