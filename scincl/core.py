@@ -90,8 +90,8 @@ class SciNCLIngestion:
         self.vector_field_name = "vector"
         self.index_name = "scincl_index"
 
-        self.max_length = 512
-        self.overlap = 128
+        self.max_window_len = 256
+        self.overlap = 64
         self._doc_ids: list[str] | None = None
         self._chunk_texts: list[str] | None = None
 
@@ -233,7 +233,7 @@ class SciNCLIngestion:
                     full_text,
                     padding="max_length",
                     truncation=True,
-                    max_length=self.max_length,
+                    max_length=self.max_window_len,
                     stride=self.overlap,
                     return_overflowing_tokens=True,
                     return_tensors="pt",
@@ -253,8 +253,9 @@ class SciNCLIngestion:
             else:
                 encodings = self.tokenizer(
                     full_text,
-                    padding=True,
+                    padding="max_length",
                     truncation=True,
+                    max_length=self.max_window_len * 2,
                     return_tensors="pt",
                 )
                 all_input_ids.append(encodings.input_ids.squeeze(0))
@@ -331,7 +332,7 @@ class SciNCLIngestion:
             os.makedirs(db_dir, exist_ok=True)
 
         logger.info(f"Creating collection '{self.collection_name}'")
-        self.client = MilvusClient(uri=db_path)
+        self.client = self._make_client(db_path)
 
         if self.client.has_collection(self.collection_name):
             logger.info("Existing collection found; dropping before recreation")
@@ -377,7 +378,7 @@ class SciNCLIngestion:
             raise FileNotFoundError(f"Milvus database not found at {db_path}")
 
         self.db_path = db_path
-        self.client = MilvusClient(uri=self.db_path)
+        self.client = self._make_client(self.db_path)
         if not self.client.has_collection(self.collection_name):
             raise ValueError(f"Collection '{self.collection_name}' missing")
         self.client.load_collection(self.collection_name)
@@ -465,6 +466,10 @@ class SciNCLIngestion:
             return "flat"
         return str(index_info["index_type"])
 
+    def _make_client(self, db_path: str | None) -> MilvusClient:
+        """Create a MilvusClient, defaulting to localhost when no path/URI is provided."""
+        return MilvusClient(uri=db_path) if db_path else MilvusClient()
+
 
 @dataclass
 class RetrievalResult:
@@ -523,11 +528,7 @@ class SciNCLRetrieval:
 
         # Encode the query as [CLS] embedding
         inputs = self.ingestion.tokenizer(
-            [query],
-            padding=True,
-            truncation=True,
-            max_length=self.ingestion.max_length,
-            return_tensors="pt",
+            [query], padding=True, truncation=True, return_tensors="pt"
         ).to(self.device)
 
         with torch.no_grad():
@@ -551,12 +552,22 @@ class SciNCLRetrieval:
         search_end = time.perf_counter()
         logger.info(f"Search time: {search_end - search_start:.2f} seconds")
 
-        if not search_results:
+        if not search_results or not search_results[0]:
             return []
+
+        search_result = search_results[0]
+        if len(search_result) == 1:
+            hit = search_result[0]
+            doc_id = hit.get("entity", {}).get("doc_id")
+            document = self.documents.get(doc_id)
+            if document is None:
+                logger.warning(f"Document ID {doc_id} not found in store; skipping")
+                return []
+            return [RetrievalResult(document=document, sim_score=hit.get("score"))]
 
         doc_chunk_hits = {}
         chunk_to_doc = {}
-        for hit in search_results[0]:
+        for hit in search_result:
             entity = hit.get("entity", {})
             doc_id, chunk_text = entity.get("doc_id"), entity.get("chunk_text")
             if not doc_id or not chunk_text:
