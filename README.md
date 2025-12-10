@@ -143,10 +143,10 @@ for result in results:
 - Check console output for deduplication statistics
 
 ### CLI Options
-- **Ingest command**: `python -m scincl.cli ingest [--force] [--model MODEL] [--index TYPE] [--output-dir DIR] [--lite]`
-- **Query command**: `python -m scincl.cli query QUERY [--k N] [--artifacts-dir DIR] [--lite]`
+- **Ingest command**: `uv run -m scincl.cli ingest [--force] [--model MODEL] [--index TYPE] [--output-dir DIR] [--lite]`
+- **Query command**: `uv run -m scincl.cli query QUERY [--k N] [--artifacts-dir DIR] [--lite]`
 - **Milvus**: server default is `http://localhost:19530`; use `--lite` for local Milvus Lite. IVF/HNSW require server mode.
-- **Help**: `python -m scincl.cli --help` or `python -m scincl.cli ingest --help`
+- **Help**: `uv run -m scincl.cli --help` or `uv run -m scincl.cli ingest --help`
 
 ## SciNCL Methodology
 
@@ -198,5 +198,5 @@ python -m qdrant.cli
 ## Troubleshooting
 
 **Memory Issues:** Reduce batch size in `scincl/core.py` or use CPU
-**Artifacts Not Found:** Run `python -m scincl.cli ingest` first
-**Qdrant Issues:** Check Docker (`docker ps`), restart (`docker-compose restart`), or reprocess data (`python -m qdrant.sentence_transformer`)
+**Artifacts Not Found:** Run `uv run -m scincl.cli ingest` first
+**Qdrant Issues:** Check Docker (`docker ps`), restart (`docker-compose restart`), or reprocess data (`uv run -m qdrant.sentence_transformer`)

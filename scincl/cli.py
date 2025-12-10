@@ -20,7 +20,7 @@ def ingest_data(args):
         ):
             print(f"Artifacts already exist in {args.output_dir}")
             print("Skipping ingestion. Use --force to re-ingest:")
-            print("  python -m scincl.cli ingest --force")
+            print("  uv run -m scincl.cli ingest --force")
             return
 
         if args.force and os.path.exists(args.output_dir):
@@ -68,7 +68,7 @@ def query_system(args):
 
     except Exception as e:
         print(f"Error loading artifacts: {e}")
-        print("Please run 'python -m scincl.cli ingest' first to create artifacts.")
+        print("Please run 'uv run -m scincl.cli ingest' first to create artifacts.")
 
 
 def main():
