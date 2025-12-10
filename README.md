@@ -10,6 +10,7 @@ A Retrieval-Augmented Generation system for medical research papers using [SciNC
 - **Smart Caching**: Automatic artifact caching
 - **Document Deduplication**: Automatic removal of duplicate documents by title
 - **CLI & Interactive**: Both command-line and interactive interfaces available
+- **LLM Assist (optional)**: LLM can rewrite user queries and generate concise answers using retrieved context via a single `retrieve` call
 
 ## Setup
 
@@ -42,6 +43,9 @@ uv sync && uv run download.py && uv run main.py
 ```bash
 # Interactive RAG system with SciNCL methodology
 uv run main.py
+
+# Interactive with LLM-assisted rewrite + answers
+uv run main.py --llm
 ```
 
 ### Milvus Server (default) vs Lite
@@ -64,8 +68,8 @@ uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5
 # Query against Milvus Lite
 uv run -m scincl.cli query "machine learning in medical diagnosis" --k 5 --v1
 
-# Query with more results
-uv run -m scincl.cli query "tuberculosis treatment" --k 10
+# Query with more results and LLM-assisted answers
+uv run -m scincl.cli query "tuberculosis treatment" --k 10 --llm
 ```
 
 ### Start/Stop Milvus Server (Docker, standalone)
@@ -85,20 +89,26 @@ bash standalone_embed.sh stop
 ```python
 from scincl import load_or_create_artifacts
 
-# Load existing artifacts or create new ones
-retrieval = load_or_create_artifacts()
+# Load existing artifacts or create new ones (enable_llm optional)
+retrieval = load_or_create_artifacts(enable_llm=True)
 
-# Query the system
-results = retrieval.retrieve_similar_documents("machine learning in medical diagnosis", k=5)
+# Query the system; returns RetrievalResult
+result = retrieval.retrieve("machine learning in medical diagnosis", k=5)
 
 # Process results
-for result in results:
-    doc = result.document
-    print(f"{doc.title} (Score: {result.score:.3f})")
-    print(f"Source: {doc.source}")
-    print(f"Abstract: {doc.abstract[:200]}...")
-    print()
+for chunk in result.retrieval_chunks:
+    doc = chunk.document
+    print(f"{doc.title} (Score: {chunk.sim_score:.3f}) | Source: {doc.source}")
+
+if result.llm_answer:
+    print("\nLLM Answer:")
+    print(result.llm_answer)
 ```
+
+### LLM Assist (optional)
+- Add `--llm` to CLI or main to enable LLM-assisted query rewrite and concise answers from retrieved context. If LLM is unavailable, the system falls back to the original query and skips the answer.
+- The `retrieve` method handles rewrite + answer generation automatically when LLM is enabled.
+- The LLM is currently set to Amazon Bedrock's Titan Text Express model.
 
 ## Data Sources
 
@@ -164,7 +174,7 @@ uv run -m eval.benchmark --backend all -k 10
 ```
 
 **Metrics:** Recall@k, Precision@k, nDCG@k, MAP, MRR@k
-**Test Set:** 10 queries in `eval/retrieval_queries.csv`
+**Test Set:** 10 queries in `eval/queries_latest.csv`
 
 ## Alternative Backend: Qdrant
 

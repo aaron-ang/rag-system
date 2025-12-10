@@ -6,7 +6,7 @@ import argparse
 import os
 import shutil
 
-from scincl.utils import load_artifacts, create_artifacts
+from scincl.utils import load_or_create_artifacts, create_artifacts
 
 
 def ingest_data(args):
@@ -14,9 +14,6 @@ def ingest_data(args):
 
     # v1: Milvus Lite + FLAT index; v2: Milvus server + IVF index (default)
     use_v1 = args.v1
-    index_type = "flat" if use_v1 else "ivf"
-    milvus_path = "milvus.db" if use_v1 else None
-    use_sliding_window = not use_v1
 
     try:
         if os.path.exists(args.output_dir):
@@ -25,10 +22,8 @@ def ingest_data(args):
 
         create_artifacts(
             model_name=args.model,
-            index_type=index_type,
             artifacts_dir=args.output_dir,
-            milvus_path=milvus_path,
-            use_sliding_window=use_sliding_window,
+            use_v1=use_v1,
         )
 
         print("Data ingestion completed successfully!")
@@ -40,19 +35,22 @@ def ingest_data(args):
 
 def query_system(args):
     use_v1 = args.v1
-    milvus_path = "milvus.db" if use_v1 else None
+    enable_llm = args.llm
 
     print(f"Loading artifacts from {args.artifacts_dir}...")
 
     try:
-        retrieval, documents = load_artifacts(
+        retrieval = load_or_create_artifacts(
             artifacts_dir=args.artifacts_dir,
-            milvus_path=milvus_path,
+            use_v1=use_v1,
+            enable_llm=enable_llm,
         )
 
-        print(f"System ready with {len(documents)} documents")
+        retrieval_result = retrieval.retrieve(args.query, k=args.k)
+        results = retrieval_result.retrieval_chunks
 
-        results = retrieval.retrieve_similar_documents(args.query, k=args.k)
+        if enable_llm and retrieval_result.llm_answer:
+            print(f"LLM Answer: {retrieval_result.llm_answer}")
 
         print(f"\nRetrieved {len(results)} documents:")
         print("=" * 80)
@@ -60,7 +58,7 @@ def query_system(args):
         for i, result in enumerate(results, 1):
             doc = result.document
             print(f"\n{i}. {doc.title}")
-            print(f"   Score: {result.sim_score:.3f}")
+            print(f"   Score: {result.score:.3f}")
             print(f"   Source: {doc.source}")
             print(f"   Abstract: {str(doc.abstract)}")
 
@@ -102,6 +100,11 @@ def main():
         "--v1",
         action="store_true",
         help="Use v1 profile: Milvus Lite with FLAT index (default is v2: Milvus server with IVF index)",
+    )
+    query_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Enable LLM-assisted rewrite/answering (requires Bedrock env vars)",
     )
     query_parser.add_argument(
         "--k", type=int, default=5, help="Number of documents to retrieve"

@@ -118,9 +118,7 @@ def evaluate_retriever(retrieval: SciNCLRetrieval, k=10, use_v1=False):
     """
     Evaluates the retrieval system on a test set of queries.
     """
-    queries_file = (
-        "eval/retrieval_queries_v1.csv" if use_v1 else "eval/retrieval_queries.csv"
-    )
+    queries_file = "eval/queries_v1.csv" if use_v1 else "eval/queries_latest.csv"
     df = pd.read_csv(queries_file)
 
     retrieved_docs = []
@@ -140,17 +138,18 @@ def evaluate_retriever(retrieval: SciNCLRetrieval, k=10, use_v1=False):
         print("-" * 60)
 
         try:
-            results = retrieval.retrieve_similar_documents(query, k)
-            if results:
-                retrieved_ids = [result.document.id for result in results]
-                retrieved_sim_scores = [result.sim_score for result in results]
+            retrieval_result = retrieval.retrieve(query, k)
+            chunks = retrieval_result.retrieval_chunks
+            if chunks:
+                retrieved_ids = [result.document.id for result in chunks]
+                retrieved_scores = [result.score for result in chunks]
             else:
                 retrieved_ids = []
-                retrieved_sim_scores = []
+                retrieved_scores = []
                 print("❌ No results found.")
 
             retrieved_docs.append(retrieved_ids)
-            retrieved_scores.append(retrieved_sim_scores)
+            retrieved_scores.append(retrieved_scores)
             ground_truth_docs.append(gt_doc_ids)
 
         except Exception as e:
@@ -192,7 +191,7 @@ def evaluate_qdrant_backend(rag_system, backend_name: str, k=10):
     Evaluates the Qdrant-based RAG system on a test set of queries.
     Supports both SentenceTransformer and TF-IDF backends.
     """
-    df = pd.read_csv("eval/retrieval_queries.csv")
+    df = pd.read_csv("eval/queries_latest.csv")
 
     retrieved_docs = []
     retrieved_scores = []

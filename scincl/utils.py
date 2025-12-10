@@ -11,39 +11,38 @@ from scincl.core import SciNCLIngestion, SciNCLRetrieval, Document
 
 
 def load_or_create_artifacts(
-    artifacts_dir="data/scincl_artifacts", use_v1: bool = False
+    artifacts_dir="data/scincl_artifacts",
+    use_v1: bool = False,
+    enable_llm: bool = False,
 ):
     """
     Load existing artifacts or create new ones if they don't exist.
 
     Args:
         artifacts_dir: Directory containing artifacts
-        use_v1: When True, use Milvus Lite (flat, full-document embeddings) defaults
+        use_v1: When True, use Milvus Lite (flat, full-document embeddings) (default: False)
+        enable_llm: Pass-through flag for LLM answering (used downstream by SciNCLRetrieval)
     """
-    milvus_path = "milvus.db" if use_v1 else None
-    index_type = "flat" if use_v1 else "ivf"
-    use_sliding_window = not use_v1
-
     try:
         print("🔄 Loading existing artifacts...")
-        retrieval, documents = load_artifacts(artifacts_dir, milvus_path)
-    except (FileNotFoundError, ValueError):
-        print("⚠️  No existing artifacts found. Creating new ones...")
-        print("⏳ This may take some time...")
-        create_artifacts(
-            index_type=index_type,
-            artifacts_dir=artifacts_dir,
-            milvus_path=milvus_path,
-            use_sliding_window=use_sliding_window,
+        retrieval, documents = load_artifacts(
+            artifacts_dir, use_v1=use_v1, enable_llm=enable_llm
         )
-        retrieval, documents = load_artifacts(artifacts_dir, milvus_path)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"⚠️  No existing artifacts found. Creating new ones... {e}")
+        create_artifacts(artifacts_dir=artifacts_dir, use_v1=use_v1)
+        retrieval, documents = load_artifacts(
+            artifacts_dir, use_v1=use_v1, enable_llm=enable_llm
+        )
 
     print(f"✅ System ready with {len(documents)} documents")
     return retrieval
 
 
 def load_artifacts(
-    artifacts_dir="data/scincl_artifacts", milvus_path: str | None = None
+    artifacts_dir="data/scincl_artifacts",
+    use_v1: bool = False,
+    enable_llm: bool = False,
 ):
     """
     Load existing artifacts from disk.
@@ -62,7 +61,7 @@ def load_artifacts(
         raise FileNotFoundError(f"Artifacts directory not found: {artifacts_dir}")
 
     required_files = ["documents.json"]
-    if SciNCLIngestion.is_lite_uri(milvus_path):
+    if use_v1:
         required_files.append("milvus.db")
     missing_files = [
         f for f in required_files if not os.path.exists(os.path.join(artifacts_dir, f))
@@ -71,11 +70,9 @@ def load_artifacts(
     if missing_files:
         raise ValueError(f"Missing artifact files: {missing_files}")
 
-    print("Loading existing artifacts...")
-
-    ingestion = SciNCLIngestion()
+    ingestion = SciNCLIngestion(use_v1=use_v1)
     ingestion.load_collection(
-        os.path.join(artifacts_dir, milvus_path) if milvus_path else None
+        os.path.join(artifacts_dir, "milvus.db") if use_v1 else None
     )
 
     with open(os.path.join(artifacts_dir, "documents.json"), "r") as f:
@@ -83,7 +80,7 @@ def load_artifacts(
 
     documents = {doc["id"]: Document.from_dict(doc) for doc in documents_list}
 
-    retrieval = SciNCLRetrieval(ingestion, documents)
+    retrieval = SciNCLRetrieval(ingestion, documents, enable_llm=enable_llm)
 
     print(f"Loaded {len(documents)} documents from artifacts")
     return retrieval, documents
@@ -91,32 +88,27 @@ def load_artifacts(
 
 def create_artifacts(
     model_name="malteos/scincl",
-    index_type: str | None = None,
     artifacts_dir="data/scincl_artifacts",
-    milvus_path: str | None = None,
-    use_sliding_window: bool = True,
+    use_v1: bool = False,
 ):
     """
     Create new artifacts from raw data.
 
     Args:
         model_name: SciNCL model name to use
-        index_type: Milvus index type ("flat" only for Lite backend). Defaults to "flat" when using Lite, "ivf" otherwise.
         artifacts_dir: Directory to save artifacts
-        use_sliding_window: Whether to chunk documents with a sliding window (v2 default). If False (v1), index full documents without chunking.
 
     Returns:
         Tuple of (retrieval, documents)
     """
-    is_lite = SciNCLIngestion.is_lite_uri(milvus_path)
-    resolved_index_type = index_type or ("flat" if is_lite else "ivf")
+    index_type = "flat" if use_v1 else "ivf"
 
     print("Creating new artifacts...")
 
     if not _check_data_availability():
         raise ValueError("Required data files are missing")
 
-    ingestion = SciNCLIngestion(model_name=model_name)
+    ingestion = SciNCLIngestion(model_name=model_name, use_v1=use_v1)
 
     def _try_process_dataset(path: str, name: str, process_func: Callable):
         if os.path.exists(path):
@@ -151,14 +143,12 @@ def create_artifacts(
     if not all_documents:
         raise ValueError("No documents found. Please run download.py first.")
 
-    embeddings = ingestion.generate_document_embeddings(
-        all_documents, use_sliding_window=use_sliding_window
-    )
+    embeddings = ingestion.generate_document_embeddings(all_documents)
     os.makedirs(artifacts_dir, exist_ok=True)
     ingestion.create_index(
         embeddings,
-        index_type=resolved_index_type,
-        db_path=os.path.join(artifacts_dir, milvus_path) if milvus_path else None,
+        index_type=index_type,
+        db_path=os.path.join(artifacts_dir, "milvus.db") if use_v1 else None,
     )
 
     # Save documents as a JSON list
