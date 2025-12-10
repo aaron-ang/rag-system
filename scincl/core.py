@@ -9,21 +9,28 @@ import os
 import time
 from dataclasses import dataclass, asdict
 
+import boto3
+import coloredlogs
 import torch
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 from pymilvus import MilvusClient
 from pymilvus.model.reranker import BGERerankFunction
 from pymilvus.milvus_client.index import IndexParams
 from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
+from verboselogs import VerboseLogger
+
+load_dotenv()
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+LOG_LEVEL = logging.INFO
+logger = VerboseLogger(__name__)
+coloredlogs.install(level=LOG_LEVEL, logger=logger)
 
 
 @dataclass
@@ -62,13 +69,93 @@ class Document:
         return cls(**data)
 
 
+class BedrockLLMAssistant:
+    """LLM utility for query rewrite and answer generation via Amazon Bedrock."""
+
+    def __init__(
+        self,
+        model_id: str = "amazon.titan-text-express-v1",
+        region: str = "us-west-2",
+        temperature: float = 0.2,
+        max_tokens: int = 8192,
+    ):
+        self.model_id = model_id
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.client = boto3.client("bedrock-runtime", region_name=region)
+
+    def rewrite_query(self, query: str):
+        """Rewrite the user query into a concise search query."""
+        prompt = (
+            "Rewrite the following user query into a concise search query for scientific literature. "
+            "Preserve core intent and key entities. Return only the rewritten query text."
+            f"\n\nUser query:\n{query}"
+        )
+
+        request = json.dumps(
+            {
+                "inputText": prompt,
+                "textGenerationConfig": {
+                    "temperature": self.temperature,
+                    "maxTokenCount": self.max_tokens,
+                },
+            }
+        )
+
+        try:
+            response = self.client.invoke_model(modelId=self.model_id, body=request)
+            model_response = json.loads(response["body"].read())
+            return str(model_response["results"][0]["outputText"])
+        except Exception as exc:
+            logger.warning(
+                f"Bedrock query rewrite failed; falling back to original query: {exc}"
+            )
+            return query
+
+    def generate_answer(self, query: str, contexts: list[str]):
+        """Generate an answer using retrieved context."""
+        context_block = (
+            "\n\n".join([f"- {c}" for c in contexts if c and c.strip()])
+            or "No additional context provided."
+        )
+
+        prompt = (
+            "You are a concise assistant for scientific literature.\n"
+            "Given a user query and retrieved passages, "
+            "produce a short, directly answer or summarize relevant findings.\n"
+            "If the context is insufficient, say so briefly.\n\n"
+            f"Query: {query}\n"
+            f"Context:\n{context_block}\n\n"
+            "Answer:"
+        )
+
+        request = json.dumps(
+            {
+                "inputText": prompt,
+                "textGenerationConfig": {
+                    "temperature": self.temperature,
+                    "maxTokenCount": self.max_tokens,
+                },
+            }
+        )
+
+        try:
+            response = self.client.invoke_model(modelId=self.model_id, body=request)
+            model_response = json.loads(response["body"].read())
+            return str(model_response["results"][0]["outputText"])
+        except Exception as exc:
+            logger.warning(f"Bedrock answer generation failed: {exc}")
+            return ""
+
+
 class SciNCLIngestion:
-    def __init__(self, model_name: str = "malteos/scincl"):
+    def __init__(self, model_name: str = "malteos/scincl", use_v1: bool = False):
         """
         Initialize the SciNCL ingestion system.
 
         Args:
             model_name: Name of the SciNCL model
+            use_v1: Whether to use v1 profile (Lite/FLAT, no rerank)
         """
         self.device = (
             "cuda"
@@ -94,6 +181,7 @@ class SciNCLIngestion:
         self.overlap = 64
         self._doc_ids: list[str] | None = None
         self._chunk_texts: list[str] | None = None
+        self.use_v1 = use_v1
 
         logger.info("SciNCL model loaded successfully")
 
@@ -194,7 +282,6 @@ class SciNCLIngestion:
     def generate_document_embeddings(
         self,
         documents: dict[str, Document],
-        use_sliding_window: bool,
         batch_size: int = 16,
     ):
         """
@@ -203,7 +290,6 @@ class SciNCLIngestion:
         Args:
             documents: dict of {doc_id: Document}
             batch_size: Number of chunks to embed at once
-            use_sliding_window: When True, use sliding-window chunking; when False, embed full documents.
 
         Returns:
             np.ndarray: Embeddings array for all document chunks (order follows input dict)
@@ -211,6 +297,7 @@ class SciNCLIngestion:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
 
+        use_sliding_window = not self.use_v1
         logger.info(
             "Generating embeddings with Sliding Window strategy..."
             if use_sliding_window
@@ -314,6 +401,7 @@ class SciNCLIngestion:
             raise ValueError("No embeddings provided to index")
 
         is_lite = self.is_lite_uri(db_path)
+        self.use_v1 = self.use_v1 or is_lite
         if is_lite and index_type.lower() != "flat":
             raise ValueError("Milvus Lite backend currently supports only 'flat' index")
 
@@ -374,6 +462,7 @@ class SciNCLIngestion:
         Attach to an existing Milvus database (Lite or server) and load the collection.
         """
         is_lite = self.is_lite_uri(db_path)
+        self.use_v1 = self.use_v1 or is_lite
         if is_lite and not os.path.exists(db_path):
             raise FileNotFoundError(f"Milvus database not found at {db_path}")
 
@@ -439,7 +528,6 @@ class SciNCLIngestion:
 
         if index_type == "flat":
             params["index_type"] = "FLAT"
-            index_params.add_index(**params)
         elif index_type.startswith("ivf"):
             sqrt_n = max(1, int(total_vectors**0.5))
             nlist = min(max(4 * sqrt_n, 1), max(total_vectors, 1))
@@ -449,12 +537,12 @@ class SciNCLIngestion:
                     "params": {"nlist": nlist},
                 }
             )
-            index_params.add_index(**params)
         elif index_type == "hnsw":
             params["index_type"] = "HNSW"
-            index_params.add_index(**params)
         else:
             raise ValueError(f"Unsupported index type: {index_type}")
+
+        index_params.add_index(**params)
 
     def _get_index_from_collection(self):
         if self.client is None:
@@ -472,28 +560,29 @@ class SciNCLIngestion:
 
 
 @dataclass
-class RetrievalResult:
-    """Represents a document retrieval result with similarity score."""
-
+class RetrievalChunk:
     document: Document
     sim_score: float
+    chunk_text: str | None = None
 
     def __post_init__(self):
-        """Validate retrieval result."""
+        """Validate retrieval chunk."""
         if not 0.0 <= self.sim_score <= 1.0:
             logger.warning(f"Score {self.sim_score} outside expected range [0.0, 1.0]")
 
-    def to_dict(self):
-        """Convert result to dictionary format."""
-        return {
-            "document": self.document.to_dict(),
-            "score": self.sim_score,
-        }
+
+@dataclass
+class RetrievalResult:
+    retrieval_chunks: list[RetrievalChunk]
+    llm_answer: str | None = None
 
 
 class SciNCLRetrieval:
     def __init__(
-        self, ingestion_system: SciNCLIngestion, documents: dict[str, Document]
+        self,
+        ingestion_system: SciNCLIngestion,
+        documents: dict[str, Document],
+        enable_llm: bool = False,
     ):
         """
         Initialize retrieval system.
@@ -501,26 +590,63 @@ class SciNCLRetrieval:
         Args:
             ingestion_system: Initialized SciNCLIngestion system
             documents: Dictionary of documents (doc_id -> Document)
+            enable_llm: Explicitly enable/disable LLM query rewrite/answering (default: False)
         """
         self.ingestion = ingestion_system
         self.documents = documents
         self.device = self.ingestion.device
-        self.reranker = BGERerankFunction(device=self.ingestion.device, use_fp16=True)
+        self.reranker = (
+            BGERerankFunction(device=self.ingestion.device, use_fp16=True)
+            if not self.ingestion.use_v1
+            else None
+        )
+        self.llm_assistant = BedrockLLMAssistant() if enable_llm else None
 
-    def retrieve_similar_documents(self, query: str, k: int):
+    def retrieve(self, query: str, k: int):
         """
-        Retrieve similar documents and rerank chunk-level hits.
+        Retrieve documents, optionally rewriting the query and generating an LLM answer.
         With chunking, multiple chunks may map to the same document.
 
         Args:
             query: Query text
             k: Number of documents to retrieve
+
+        Returns:
+            RetrievalResult containing retrieved chunks and optional LLM answer
+        """
+        if k <= 0:
+            raise ValueError("k must be positive")
+
+        if self.llm_assistant:
+            rewrite_start = time.perf_counter()
+            query = self.llm_assistant.rewrite_query(query)
+            rewrite_end = time.perf_counter()
+            logger.notice(f"Rewrite time: {rewrite_end - rewrite_start:.2f} seconds")
+
+        retrieval_chunks = self._search_and_rerank(query, k)
+
+        llm_answer = None
+        if self.llm_assistant and retrieval_chunks:
+            contexts = [
+                chunk.chunk_text for chunk in retrieval_chunks if chunk.chunk_text
+            ]
+            generate_start = time.perf_counter()
+            llm_answer = self.llm_assistant.generate_answer(query, contexts)
+            generate_end = time.perf_counter()
+            logger.notice(f"Generate time: {generate_end - generate_start:.2f} seconds")
+
+        return RetrievalResult(retrieval_chunks=retrieval_chunks, llm_answer=llm_answer)
+
+    def _search_and_rerank(self, query: str, k: int):
+        """
+        Internal search and rerank pipeline without LLM usage.
+
+        Args:
+            query: Query text (already rewritten if LLM is enabled)
+            k: Number of documents to retrieve
         """
         if self.ingestion.client is None:
             raise ValueError("Collection not loaded")
-
-        if k <= 0:
-            raise ValueError("k must be positive")
 
         n_vectors = self.ingestion.get_vector_count()
         if n_vectors == 0:
@@ -528,7 +654,9 @@ class SciNCLRetrieval:
 
         # Encode the query as [CLS] embedding
         inputs = self.ingestion.tokenizer(
-            [query], padding=True, truncation=True, return_tensors="pt"
+            [query],
+            padding=True,
+            return_tensors="pt",
         ).to(self.device)
 
         with torch.no_grad():
@@ -550,7 +678,7 @@ class SciNCLRetrieval:
             output_fields=["doc_id", "chunk_text"],
         )
         search_end = time.perf_counter()
-        logger.info(f"Search time: {search_end - search_start:.2f} seconds")
+        logger.notice(f"Search time: {search_end - search_start:.2f} seconds")
 
         if not search_results or not search_results[0]:
             return []
@@ -558,13 +686,37 @@ class SciNCLRetrieval:
         search_result = search_results[0]
         if len(search_result) == 1:
             hit = search_result[0]
-            doc_id = hit.get("entity", {}).get("doc_id")
+            entity = hit.get("entity", {})
+            doc_id = entity.get("doc_id")
             document = self.documents.get(doc_id)
             if document is None:
                 logger.warning(f"Document ID {doc_id} not found in store; skipping")
                 return []
-            return [RetrievalResult(document=document, sim_score=hit.get("score"))]
+            return [RetrievalChunk(document=document, sim_score=hit.get("distance"))]
 
+        if self.reranker is None:
+            results = []
+            seen = set()
+            for hit in search_result:
+                entity = hit.get("entity", {})
+                doc_id = entity.get("doc_id")
+                if not doc_id or doc_id in seen:
+                    continue
+                doc = self.documents.get(doc_id)
+                if doc is None:
+                    logger.warning(f"Document ID {doc_id} not found in store; skipping")
+                    continue
+                results.append(
+                    RetrievalChunk(document=doc, sim_score=hit.get("distance"))
+                )
+                seen.add(doc_id)
+                if len(results) >= k:
+                    break
+            return results
+
+        return self._rerank_results(query, search_result, k)
+
+    def _rerank_results(self, query: str, search_result: list[dict], k: int):
         doc_chunk_hits = {}
         chunk_to_doc = {}
         for hit in search_result:
@@ -598,7 +750,13 @@ class SciNCLRetrieval:
             if doc is None:
                 logger.warning(f"Document ID {doc_id} not found in store; skipping")
                 continue
-            results.append(RetrievalResult(document=doc, sim_score=result.score))
+            results.append(
+                RetrievalChunk(
+                    document=doc,
+                    sim_score=result.score,
+                    chunk_text=result.text,
+                )
+            )
             seen.add(doc_id)
 
         return results

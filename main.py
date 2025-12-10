@@ -44,10 +44,10 @@ def interactive_query(retrieval: SciNCLRetrieval):
                 print("⚠️  Please enter a query.")
                 continue
 
-            print(f"\n🔍 Searching for: '{query}'")
             print("⏳ Processing...")
 
-            results = retrieval.retrieve_similar_documents(query, k=5)
+            retrieval_result = retrieval.retrieve(query, k=5)
+            results = retrieval_result.retrieval_chunks
 
             if not results:
                 print("❌ No results found.")
@@ -82,6 +82,14 @@ def interactive_query(retrieval: SciNCLRetrieval):
                 print(wrapped_abstract)
                 print("\n" + "-" * 80)
 
+            if answer := retrieval_result.llm_answer:
+                print("\n🤖 LLM Answer:")
+                print(
+                    textwrap.fill(
+                        answer, width=75, initial_indent="  ", subsequent_indent="   "
+                    )
+                )
+
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")
             break
@@ -108,19 +116,26 @@ def demo_queries(retrieval: SciNCLRetrieval):
         print("-" * 60)
 
         try:
-            results = retrieval.retrieve_similar_documents(query, k=3)
-            if results:
-                print(f"✅ Found {len(results)} relevant document(s):")
-                for idx, result in enumerate(results, 1):
-                    doc = result.document
-                    title = doc.title
-                    score = result.sim_score
-                    source = doc.source
-                    score_indicator = _score_indicator(score)
-                    print(f"   📄 {idx}. {title}")
-                    print(f"      {score_indicator} Score: {score:.3f} | 📂 {source}")
-            else:
+            retrieval_result = retrieval.retrieve(query, k=3)
+            results = retrieval_result.retrieval_chunks
+
+            if not results:
                 print("❌ No results found.")
+                continue
+
+            print(f"✅ Found {len(results)} relevant document(s):")
+            for idx, result in enumerate(results, 1):
+                doc = result.document
+                title = doc.title
+                score = result.sim_score
+                source = doc.source
+                score_indicator = _score_indicator(score)
+                print(f"   📄 {idx}. {title}")
+                print(f"      {score_indicator} Score: {score:.3f} | 📂 {source}")
+
+            if answer := retrieval_result.llm_answer:
+                print(f"   🤖 Answer: {answer}")
+
         except Exception as e:
             print(f"❌ Error processing query: {e}")
 
@@ -149,9 +164,15 @@ def main():
         action="store_true",
         help="Run demo queries only (no interactive prompt)",
     )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Enable LLM-assisted rewrite/answering (requires Bedrock env vars)",
+    )
     args = parser.parse_args()
 
     use_v1 = args.v1
+    enable_llm = args.llm
     profile_label = (
         "v1 (Milvus Lite, FLAT, full-document embeddings)"
         if use_v1
@@ -164,10 +185,10 @@ def main():
     print("📚 Medical Research Paper Retrieval System")
     print("=" * 60)
     print(f"🎛️ Profile: {profile_label}")
-    print(f"🧪 Mode: {'Demo only' if args.demo else 'Demo + Interactive'}")
+    print(f"🧪 Mode: {'Demo' if args.demo else 'Interactive'}")
 
     try:
-        retrieval = load_or_create_artifacts(use_v1=use_v1)
+        retrieval = load_or_create_artifacts(use_v1=use_v1, enable_llm=enable_llm)
 
         if args.demo:
             print("\n🎯 Running demo queries...")
