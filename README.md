@@ -5,7 +5,7 @@ A Retrieval-Augmented Generation system for medical research papers using [SciNC
 ## Features
 
 - **SciNCL Integration**: Uses the official SciNCL model for document embeddings
-- **FAISS Indexing**: Fast similarity search using Facebook's FAISS library
+- **Milvus Lite Indexing**: Local flat vector search with Milvus Lite
 - **Multiple Data Sources**: PubMed abstracts and Semantic Scholar papers
 - **Smart Caching**: Automatic artifact caching with force re-ingestion option
 - **Document Deduplication**: Automatic removal of duplicate documents by title
@@ -67,7 +67,7 @@ uv run -m scincl.cli query "tuberculosis treatment" --k 10
 from scincl import load_or_create_artifacts
 
 # Load existing artifacts or create new ones
-retrieval, documents = load_or_create_artifacts()
+retrieval = load_or_create_artifacts()
 
 # Query the system
 results = retrieval.retrieve_similar_documents("machine learning in medical diagnosis", k=5)
@@ -103,7 +103,7 @@ for result in results:
   - `core.py` - SciNCL ingestion and retrieval system
   - `cli.py` - Command-line interface
 - `data/` - Downloaded datasets and generated artifacts
-- `data/scincl_artifacts/` - FAISS indices, embeddings, and documents
+- `data/scincl_artifacts/` - database, embeddings metadata, and documents
 
 ## Advanced Features
 
@@ -131,13 +131,13 @@ This implementation uses the [SciNCL model](https://huggingface.co/malteos/scinc
 
 1. **Scientific Document Embeddings**: Specialized embeddings for scientific papers
 2. **Title-Abstract Concatenation**: Combines title and abstract with [SEP] token
-3. **FAISS Integration**: Efficient similarity search with multiple index types
+3. **Milvus Lite Integration**: Efficient local cosine search with a flat index
 4. **Cosine Similarity**: Uses normalized embeddings for accurate similarity matching
 
 ## Evaluation
 
 ```bash
-# Default (SciNCL+FAISS)
+# Default (SciNCL + Milvus Lite)
 uv run -m eval.benchmark
 
 # Specific backend: scincl | qdrant_st | qdrant_tfidf | all
@@ -164,7 +164,7 @@ python -m qdrant.cli
 ```
 
 **When to use:**
-- **SciNCL+FAISS**: Research, benchmarks, official methodology
+- **SciNCL + Milvus Lite**: Research, benchmarks, official methodology
 - **Qdrant+ST**: Production, persistent storage, scalable
 - **Qdrant+TF-IDF**: Baselines, prototyping, CPU-only
 

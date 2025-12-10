@@ -1,6 +1,6 @@
 """
 Unified evaluation script for all RAG backends.
-Supports SciNCL+FAISS, Qdrant+SentenceTransformer, and Qdrant+TF-IDF.
+Supports SciNCL+Milvus Lite, Qdrant+SentenceTransformer, and Qdrant+TF-IDF.
 """
 
 import argparse
@@ -318,7 +318,7 @@ def main():
 
     if args.backend == "scincl" or args.backend == "all":
         print("\n" + "=" * 80)
-        print("EVALUATING: SciNCL + FAISS Backend")
+        print("EVALUATING: SciNCL + Milvus Lite Backend")
         print("=" * 80)
         try:
             retrieval = load_or_create_artifacts()

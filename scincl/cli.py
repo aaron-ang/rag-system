@@ -14,7 +14,7 @@ def ingest_data(args):
     try:
         # Check if artifacts exist and handle force flag
         if (
-            os.path.exists(os.path.join(args.output_dir, "faiss_index.bin"))
+            os.path.exists(os.path.join(args.output_dir, "milvus.db"))
             and not args.force
         ):
             print(f"Artifacts already exist in {args.output_dir}")
@@ -78,8 +78,8 @@ def main():
     ingest_parser.add_argument(
         "--index-type",
         default="flat",
-        choices=["flat", "ivf", "hnsw"],
-        help="FAISS index type",
+        choices=["flat"],
+        help="Index type",
     )
     ingest_parser.add_argument(
         "--output-dir",
