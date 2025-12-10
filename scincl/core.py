@@ -409,7 +409,7 @@ class SciNCLIngestion:
         if index_type == "flat":
             return "FLAT", {}, {}
 
-        if index_type == "ivf_flat":
+        if index_type.startswith("ivf"):
             sqrt_n = max(1, int(total_vectors**0.5))
             nlist = min(max(4 * sqrt_n, 1), max(total_vectors, 1))
             search_params = {
@@ -471,9 +471,7 @@ class SciNCLRetrieval:
         self.ingestion = ingestion_system
         self.documents = documents
         self.device = self.ingestion.device
-        self.reranker = BGERerankFunction(
-            device=self.ingestion.device, use_fp16=(self.ingestion.device == "cuda")
-        )
+        self.reranker = BGERerankFunction(device=self.ingestion.device, use_fp16=True)
 
     def retrieve_similar_documents(self, query: str, k: int):
         """
@@ -511,7 +509,7 @@ class SciNCLRetrieval:
         oversample_factor = n_vectors / max(len(self.documents), 1)
         target = int(np.ceil(k * max(oversample_factor, 1.0)))
         search_k = min(max(target, k), n_vectors)
-        
+
         search_start = time.perf_counter()
         search_results = self.ingestion.client.search(
             collection_name=self.ingestion.collection_name,
@@ -527,38 +525,40 @@ class SciNCLRetrieval:
         if not search_results:
             return []
 
-        # Build ordered chunk_text -> doc_id mapping for reranking
-        chunk_hits: dict[str, str] = {}
+        doc_chunk_hits = {}
+        chunk_to_doc = {}
         for hit in search_results[0]:
             entity = hit.get("entity", {})
-            doc_id = entity.get("doc_id")
-            chunk_text = entity.get("chunk_text")
-            if doc_id is None or chunk_text is None:
+            doc_id, chunk_text = entity.get("doc_id"), entity.get("chunk_text")
+            if not doc_id or not chunk_text:
                 logger.warning(
                     "Missing doc_id or chunk_text in search result; skipping"
                 )
                 continue
-            chunk_hits[chunk_text] = doc_id
+            doc_chunk_hits.setdefault(doc_id, chunk_text)
+            chunk_to_doc.setdefault(chunk_text, doc_id)
 
-        if not chunk_hits:
+        if not doc_chunk_hits:
             return []
 
         rerank_start = time.perf_counter()
-        rerank_results = self.reranker(query, list(chunk_hits.keys()))
+        rerank_results = self.reranker(query, list(doc_chunk_hits.values()))
         rerank_end = time.perf_counter()
         logger.info(f"Rerank time: {rerank_end - rerank_start:.2f} seconds")
-        # reranked results are already sorted by score
-        # so we can choose the highest score for each document
-        results: dict[str, RetrievalResult] = {}
+
+        results = []
+        seen = set()
         for result in rerank_results:
             if len(results) >= k:
                 break
-            doc_id = chunk_hits[result.text]
-            if doc_id not in results:
-                doc = self.documents.get(doc_id)
-                if doc is None:
-                    logger.warning(f"Document ID {doc_id} not found in store; skipping")
-                    continue
-                results[doc_id] = RetrievalResult(document=doc, sim_score=result.score)
+            doc_id = chunk_to_doc.get(result.text)
+            if not doc_id or doc_id in seen:
+                continue
+            doc = self.documents.get(doc_id)
+            if doc is None:
+                logger.warning(f"Document ID {doc_id} not found in store; skipping")
+                continue
+            results.append(RetrievalResult(document=doc, sim_score=result.score))
+            seen.add(doc_id)
 
-        return list(results.values())
+        return results
