@@ -311,6 +311,11 @@ def main():
         help='Choose backend to evaluate (default: scincl). Use "all" to test all backends.',
     )
     parser.add_argument(
+        "--lite",
+        action="store_true",
+        help="Use Milvus Lite (local milvus.db) for the SciNCL backend; default is Milvus server at http://localhost:19530",
+    )
+    parser.add_argument(
         "-k", type=int, default=10, help="Number of documents to retrieve (default: 10)"
     )
 
@@ -318,10 +323,16 @@ def main():
 
     if args.backend == "scincl" or args.backend == "all":
         print("\n" + "=" * 80)
-        print("EVALUATING: SciNCL + Milvus Lite Backend")
+        print(
+            "EVALUATING: SciNCL + Milvus "
+            + ("Lite" if args.lite else "Server")
+            + " Backend"
+        )
         print("=" * 80)
         try:
-            retrieval = load_or_create_artifacts()
+            retrieval = load_or_create_artifacts(
+                milvus_uri=None if args.lite else "http://localhost:19530"
+            )
             evaluate_retriever(retrieval, k=args.k)
         except Exception as e:
             print(f"❌ Failed to evaluate SciNCL backend: {e}")
