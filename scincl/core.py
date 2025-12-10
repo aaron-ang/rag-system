@@ -1,22 +1,23 @@
 """
-SciNCL-based data ingestion and FAISS retrieval system.
+SciNCL-based data ingestion and retrieval system.
 """
 
 import ast
 import json
 import logging
 import os
-import pickle
 from dataclasses import dataclass, asdict
 
-import faiss
 import torch
 import numpy as np
 import pandas as pd
+from pymilvus import MilvusClient
+from pymilvus.model.reranker import BGERerankFunction
 from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -67,25 +68,29 @@ class SciNCLIngestion:
         Args:
             model_name: Name of the SciNCL model
         """
-        device = (
+        self.device = (
             "cuda"
             if torch.cuda.is_available()
             else "mps"
-            if torch.backends.mps.is_available()
+            if torch.mps.is_available()
             else "cpu"
         )
-        self.device = device
-        self.faiss_index: faiss.Index | None = None
-        self._doc_ids: list[str] | None = None
-
         logger.info(f"Loading SciNCL model on {self.device}")
         self.tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(model_name)
         self.base_model: AutoModel = AutoModel.from_pretrained(model_name).to(
             self.device
         )
+        self.base_model.eval()
+
+        self.db_path: str | None = None
+        self.collection: MilvusClient | None = None
+        self.collection_name = "scincl_chunks"
+        self.vector_field_name = "vector"
 
         self.max_length = 512
         self.overlap = 128
+        self._doc_ids: list[str] | None = None
+        self._chunk_texts: list[str] | None = None
 
         logger.info("SciNCL model loaded successfully")
 
@@ -202,6 +207,7 @@ class SciNCLIngestion:
         logger.info("Generating embeddings with Sliding Window strategy...")
 
         self._doc_ids = []
+        self._chunk_texts = []
         all_input_ids: list[torch.Tensor] = []
         all_attention_masks: list[torch.Tensor] = []
 
@@ -226,6 +232,13 @@ class SciNCLIngestion:
             all_input_ids.extend([chunk for chunk in encodings.input_ids])
             all_attention_masks.extend([mask for mask in encodings.attention_mask])
             self._doc_ids.extend([doc_id] * chunk_count)
+
+            chunk_texts = self.tokenizer.batch_decode(
+                encodings.input_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+            self._chunk_texts.extend(chunk_texts)
 
         if not all_input_ids:
             logger.warning("No chunks found to embed; returning empty embeddings array")
@@ -263,86 +276,102 @@ class SciNCLIngestion:
             )
         return outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
-    # TODO: verify if this is the best way to create the index
-    def create_faiss_index(self, embeddings: np.ndarray, index_type: str = "flat"):
+    def create_index(
+        self,
+        embeddings: np.ndarray,
+        index_type: str = "flat",
+        db_path: str | None = None,
+    ):
         """
-        Create FAISS index for efficient similarity search.
-
         Args:
             embeddings: Document embeddings array
-            index_type: Type of FAISS index ("flat", "ivf", "hnsw")
-
-        Returns:
-            FAISS index
+            index_type: Index type to create (only 'flat' is supported)
         """
-        logger.info(f"Creating FAISS '{index_type}' index")
+        if embeddings.size == 0:
+            raise ValueError("No embeddings provided to index")
 
-        dim = embeddings.shape[1]
-        n_vectors = len(embeddings)
+        if index_type.lower() != "flat":
+            raise ValueError("Milvus Lite backend currently supports only 'flat' index")
 
-        if index_type == "flat":
-            index = faiss.IndexFlatIP(dim)
-        elif index_type == "ivf":
-            # Calculate nlist based on FAISS guidance: K = 4*sqrt(N) to 16*sqrt(N)
-            sqrt_n = int(n_vectors**0.5)
-            nlist = 4 * sqrt_n
-            nlist = min(nlist, n_vectors)
-            quantizer = faiss.IndexFlatIP(dim)
-            index = faiss.IndexIVFFlat(quantizer, dim, nlist)
-            index.nprobe = max(1, nlist // 4)
-            logger.info(f"IVF parameters: nlist={nlist}, nprobe={index.nprobe}")
-        elif index_type == "hnsw":
-            # HNSW parameter: 4 <= M <= 64
-            hnsw_m = 16
-            index = faiss.IndexHNSWFlat(dim, hnsw_m)
-            # Set efSearch for speed-accuracy tradeoff (default: 16)
-            ef_search = 16
-            index.hnsw.efSearch = ef_search
-            logger.info(f"HNSW parameters: M={hnsw_m}, efSearch={ef_search}")
-        else:
-            raise ValueError(f"Unsupported index type: {index_type}")
+        if self._doc_ids is None or self._chunk_texts is None:
+            raise ValueError("Document IDs and chunk texts must be generated first")
 
-        # Normalize embeddings (L2) for cosine similarity
-        faiss.normalize_L2(embeddings)
+        if len(self._doc_ids) != len(embeddings) or len(self._chunk_texts) != len(
+            embeddings
+        ):
+            raise ValueError("Mismatch between embeddings and stored chunk metadata")
 
-        if index_type == "ivf":
-            logger.info("Training IVF index...")
-            index.train(embeddings)
+        self.db_path = db_path or "milvus.db"
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        logger.info(f"Creating collection '{self.collection_name}' at {self.db_path}")
+        self.collection = MilvusClient(self.db_path)
 
-        logger.info("Adding embeddings to index...")
-        index.add(embeddings)
-        self.faiss_index = index
+        if self.collection.has_collection(self.collection_name):
+            logger.info("Existing collection found; dropping before recreation")
+            self.collection.drop_collection(self.collection_name)
 
-        logger.info(f"FAISS index created with {index.ntotal} vectors")
-        return index
+        index_params = self.collection.prepare_index_params()
+        index_params.add_index(
+            field_name=self.vector_field_name,
+            index_type="FLAT",
+            metric_type="COSINE",
+        )
 
-    def save_artifacts(self, output_dir: str):
-        """Save all artifacts for later use."""
-        os.makedirs(output_dir, exist_ok=True)
+        self.collection.create_collection(
+            collection_name=self.collection_name,
+            dimension=embeddings.shape[1],
+            metric_type="COSINE",
+            auto_id=True,
+            index_params=index_params,
+        )
 
-        if self.faiss_index is not None:
-            faiss.write_index(
-                self.faiss_index, os.path.join(output_dir, "faiss_index.bin")
+        logger.info("Adding embeddings to collection...")
+        records = [
+            {
+                self.vector_field_name: embedding.tolist(),
+                "doc_id": doc_id,
+                "chunk_text": chunk_text,
+            }
+            for doc_id, chunk_text, embedding in zip(
+                self._doc_ids, self._chunk_texts, embeddings
             )
+        ]
+        self.collection.insert(self.collection_name, records)
 
+        logger.info(f"Collection ready with {len(embeddings)} vectors")
+
+    def load_collection(self, db_path: str | None = None):
+        """
+        Attach to an existing Milvus Lite database and load the collection.
+        """
+        path = db_path or self.db_path
+        if path is None:
+            raise ValueError("Milvus database path is not set")
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Milvus database not found at {path}")
+
+        self.db_path = path
+        self.collection = MilvusClient(path)
+        if not self.collection.has_collection(self.collection_name):
+            raise ValueError(
+                f"Collection '{self.collection_name}' missing in {self.db_path}"
+            )
+        self.collection.load_collection(self.collection_name)
+
+    def get_vector_count(self):
+        """Return number of vectors stored in the collection."""
         if self._doc_ids is not None:
-            with open(os.path.join(output_dir, "doc_ids.pkl"), "wb") as f:
-                pickle.dump(self._doc_ids, f)
-
-        logger.info(f"Artifacts saved to {output_dir}")
-
-    def load_artifacts(self, output_dir: str):
-        """Load previously saved artifacts."""
-        index_path = os.path.join(output_dir, "faiss_index.bin")
-        if os.path.exists(index_path):
-            self.faiss_index = faiss.read_index(index_path)
-
-        doc_ids_path = os.path.join(output_dir, "doc_ids.pkl")
-        if os.path.exists(doc_ids_path):
-            with open(doc_ids_path, "rb") as f:
-                self._doc_ids = pickle.load(f)
-
-        logger.info(f"Artifacts loaded from {output_dir}")
+            return len(self._doc_ids)
+        if self.collection is None or self.collection_name is None:
+            return 0
+        try:
+            stats = self.collection.get_collection_stats(self.collection_name)
+            return int(stats.get("row_count", 0))
+        except Exception as exc:
+            logger.warning(f"Could not fetch collection stats: {exc}")
+            return 0
 
 
 @dataclass
@@ -378,33 +407,27 @@ class SciNCLRetrieval:
         """
         self.ingestion = ingestion_system
         self.documents = documents
+        self.device = self.ingestion.device
+        self.reranker = BGERerankFunction(
+            device=self.ingestion.device, use_fp16=(self.ingestion.device == "cuda")
+        )
 
-    def retrieve_similar_documents(
-        self, query: str, k: int, oversample_factor: float = 5.0
-    ):
+    def retrieve_similar_documents(self, query: str, k: int):
         """
-        Retrieve similar documents using FAISS.
+        Retrieve similar documents and rerank chunk-level hits.
         With chunking, multiple chunks may map to the same document.
-        We group by document and take the best score.
 
         Args:
             query: Query text
             k: Number of documents to retrieve
-            oversample_factor: Multiplier to fetch extra chunks to improve deduping
-
-        Returns:
-            List of RetrievalResult objects
         """
-        if self.ingestion.faiss_index is None:
-            raise ValueError("FAISS index not initialized")
-        if self.ingestion._doc_ids is None:
-            raise ValueError("Document IDs for chunks not initialized")
+        if self.ingestion.collection is None:
+            raise ValueError("Collection not loaded")
+
         if k <= 0:
             raise ValueError("k must be positive")
-        if len(self.ingestion._doc_ids) != self.ingestion.faiss_index.ntotal:
-            raise ValueError("Mismatch between stored doc IDs and FAISS index size")
 
-        n_vectors = self.ingestion.faiss_index.ntotal
+        n_vectors = self.ingestion.get_vector_count()
         if n_vectors == 0:
             return []
 
@@ -415,40 +438,56 @@ class SciNCLRetrieval:
             truncation=True,
             max_length=self.ingestion.max_length,
             return_tensors="pt",
-        ).to(self.ingestion.device)
+        ).to(self.device)
 
         with torch.no_grad():
             outputs = self.ingestion.base_model(**inputs)
             query_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
-        # Normalize the embedding for cosine similarity
-        faiss.normalize_L2(query_embedding)
-
         # Search for extra chunks to increase odds of k unique documents
+        oversample_factor = n_vectors / len(self.documents)
         target = int(np.ceil(k * max(oversample_factor, 1.0)))
         search_k = min(max(target, k), n_vectors)
-        scores, indices = self.ingestion.faiss_index.search(query_embedding, search_k)
+        search_results = self.ingestion.collection.search(
+            collection_name=self.ingestion.collection_name,
+            data=query_embedding.tolist(),
+            anns_field=self.ingestion.vector_field_name,
+            limit=search_k,
+            output_fields=["doc_id", "chunk_text"],
+        )
+        if not search_results:
+            return []
 
-        # Group chunks by document ID and take the best score per document
-        doc_scores: dict[str, float] = {}
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < 0:
+        # Build ordered chunk_text -> doc_id mapping for reranking
+        chunk_hits: dict[str, str] = {}
+        for hit in search_results[0]:
+            entity = hit.get("entity", {})
+            doc_id = entity.get("doc_id")
+            chunk_text = entity.get("chunk_text")
+            if doc_id is None or chunk_text is None:
+                logger.warning(
+                    "Missing doc_id or chunk_text in search result; skipping"
+                )
                 continue
-            doc_id = self.ingestion._doc_ids[idx]
-            # Keep the maximum score for each document
-            if doc_id not in doc_scores or score > doc_scores[doc_id]:
-                doc_scores[doc_id] = float(score)
+            chunk_hits[chunk_text] = doc_id
 
-        # Sort by score and take top-k
-        sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)[:k]
+        if not chunk_hits:
+            return []
 
-        # Convert to RetrievalResult objects
-        results: list[RetrievalResult] = []
-        for doc_id, score in sorted_docs:
-            doc = self.documents.get(doc_id)
-            if doc is None:
-                logger.warning(f"Document ID {doc_id} not found in store; skipping")
-                continue
-            results.append(RetrievalResult(document=doc, sim_score=score))
+        rerank_results = self.reranker(query, list(chunk_hits.keys()))
 
-        return results
+        # reranked results are already sorted by score
+        # so we can choose the highest score for each document
+        results: dict[str, RetrievalResult] = {}
+        for result in rerank_results:
+            if len(results) >= k:
+                break
+            doc_id = chunk_hits[result.text]
+            if doc_id not in results:
+                doc = self.documents.get(doc_id)
+                if doc is None:
+                    logger.warning(f"Document ID {doc_id} not found in store; skipping")
+                    continue
+                results[doc_id] = RetrievalResult(document=doc, sim_score=result.score)
+
+        return list(results.values())

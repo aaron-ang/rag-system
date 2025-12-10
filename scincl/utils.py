@@ -20,14 +20,14 @@ def load_or_create_artifacts(artifacts_dir="data/scincl_artifacts"):
     try:
         print("🔄 Loading existing artifacts...")
         retrieval, documents = load_artifacts(artifacts_dir)
-        print(f"✅ System ready with {len(documents)} documents")
-        return retrieval
     except (FileNotFoundError, ValueError):
         print("⚠️  No existing artifacts found. Creating new ones...")
         print("⏳ This may take some time...")
-        retrieval, documents = create_artifacts(artifacts_dir=artifacts_dir)
-        print(f"✅ System ready with {len(documents)} documents")
-        return retrieval
+        create_artifacts(artifacts_dir=artifacts_dir)
+        retrieval, documents = load_artifacts(artifacts_dir=artifacts_dir)
+
+    print(f"✅ System ready with {len(documents)} documents")
+    return retrieval
 
 
 def load_artifacts(artifacts_dir="data/scincl_artifacts"):
@@ -48,9 +48,8 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
         raise FileNotFoundError(f"Artifacts directory not found: {artifacts_dir}")
 
     required_files = [
-        "faiss_index.bin",
+        "milvus.db",
         "documents.json",
-        "doc_ids.pkl",
     ]
     missing_files = [
         f for f in required_files if not os.path.exists(os.path.join(artifacts_dir, f))
@@ -62,7 +61,7 @@ def load_artifacts(artifacts_dir="data/scincl_artifacts"):
     print("Loading existing artifacts...")
 
     ingestion = SciNCLIngestion()
-    ingestion.load_artifacts(artifacts_dir)
+    ingestion.load_collection(os.path.join(artifacts_dir, "milvus.db"))
 
     with open(os.path.join(artifacts_dir, "documents.json"), "r") as f:
         documents_list = json.load(f)
@@ -85,7 +84,7 @@ def create_artifacts(
 
     Args:
         model_name: SciNCL model name to use
-        index_type: FAISS index type ("flat", "ivf", "hnsw", etc.)
+        index_type: Milvus index type ("flat" only for Lite backend)
         artifacts_dir: Directory to save artifacts
 
     Returns:
@@ -132,10 +131,12 @@ def create_artifacts(
         raise ValueError("No documents found. Please run download.py first.")
 
     embeddings = ingestion.generate_document_embeddings(all_documents)
-    ingestion.create_faiss_index(embeddings, index_type=index_type)
-
     os.makedirs(artifacts_dir, exist_ok=True)
-    ingestion.save_artifacts(artifacts_dir)
+    ingestion.create_index(
+        embeddings,
+        index_type=index_type,
+        db_path=os.path.join(artifacts_dir, "milvus.db"),
+    )
 
     # Save documents as a JSON list
     documents_list = [
@@ -144,9 +145,7 @@ def create_artifacts(
     with open(os.path.join(artifacts_dir, "documents.json"), "w") as f:
         json.dump(documents_list, f, indent=2)
 
-    retrieval = SciNCLRetrieval(ingestion, all_documents)
     print(f"Created artifacts for {len(all_documents)} documents")
-    return retrieval, all_documents
 
 
 def _check_data_availability():

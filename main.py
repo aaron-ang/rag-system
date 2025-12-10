@@ -36,7 +36,7 @@ def interactive_query(retrieval: SciNCLRetrieval):
             if query.lower() == "stats":
                 print("\n📊 System Statistics:")
                 print(f"   📚 Total documents: {len(retrieval.documents)}")
-                print("   🔍 Index type: FAISS")
+                print("   🔍 Index type: FLAT")
                 print("   🤖 Model: SciNCL")
                 continue
             if not query:
