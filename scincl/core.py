@@ -6,6 +6,7 @@ import ast
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, asdict
 
@@ -313,31 +314,24 @@ class SciNCLIngestion:
         doc_items = list(documents.items())
 
         for doc_id, doc in tqdm(doc_items, desc="Preparing document inputs"):
-            full_text = f"{doc.title}{sep}{doc.abstract}"
-
             if use_sliding_window:
-                encodings = self.tokenizer(
-                    full_text,
-                    padding="max_length",
-                    truncation=True,
-                    max_length=self.max_window_len,
-                    stride=self.overlap,
-                    return_overflowing_tokens=True,
-                    return_tensors="pt",
-                )
-
-                chunk_count = encodings.input_ids.size(0)
-                all_input_ids.extend([chunk for chunk in encodings.input_ids])
-                all_attention_masks.extend([mask for mask in encodings.attention_mask])
-                self._doc_ids.extend([doc_id] * chunk_count)
-
-                chunk_texts = self.tokenizer.batch_decode(
-                    encodings.input_ids,
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=True,
-                )
-                self._chunk_texts.extend(chunk_texts)
+                abstract_chunks = self._sentence_chunks(doc.abstract)
+                prefix = f"{doc.title}{sep}"
+                for abstract_chunk in abstract_chunks:
+                    full_text = f"{prefix}{abstract_chunk}"
+                    encodings = self.tokenizer(
+                        full_text,
+                        padding="max_length",
+                        truncation=True,
+                        max_length=self.max_window_len,
+                        return_tensors="pt",
+                    )
+                    all_input_ids.append(encodings.input_ids.squeeze(0))
+                    all_attention_masks.append(encodings.attention_mask.squeeze(0))
+                    self._doc_ids.append(doc_id)
+                    self._chunk_texts.append(full_text)
             else:
+                full_text = f"{doc.title}{sep}{doc.abstract}"
                 encodings = self.tokenizer(
                     full_text,
                     padding="max_length",
@@ -384,12 +378,52 @@ class SciNCLIngestion:
             outputs = self.base_model(
                 input_ids=input_ids_batch, attention_mask=attention_mask_batch
             )
-        return outputs.last_hidden_state[:, 0, :].cpu().numpy()
+        embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+        return self._normalize_embeddings(embeddings)
+
+    def _normalize_embeddings(self, embeddings: np.ndarray):
+        """L2-normalize embedding matrix; safeguards zero vectors."""
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return embeddings / norms
+
+    def _sentence_chunks(self, text: str):
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+        if not sentences:
+            return [text]
+
+        chunks = []
+        current = []
+
+        def token_len(parts: list[str]):
+            return len(self.tokenizer.tokenize(" ".join(parts)))
+
+        for sentence in sentences:
+            candidate = current + [sentence]
+            if token_len(candidate) <= self.max_window_len:
+                current = candidate
+                continue
+
+            if current:
+                chunks.append(" ".join(current))
+
+            # keep a short tail for context overlap
+            tail = []
+            for s in reversed(current):
+                if token_len([s] + tail) <= self.overlap:
+                    tail.insert(0, s)
+                else:
+                    break
+            current = tail + [sentence]
+
+        if current:
+            chunks.append(" ".join(current))
+
+        return chunks
 
     def create_index(
         self,
         embeddings: np.ndarray,
-        index_type: str = "flat",
         db_path: str | None = None,
     ):
         """
@@ -400,8 +434,9 @@ class SciNCLIngestion:
         if embeddings.size == 0:
             raise ValueError("No embeddings provided to index")
 
+        index_type = "flat" if self.use_v1 else "ivf"
+
         is_lite = self.is_lite_uri(db_path)
-        self.use_v1 = self.use_v1 or is_lite
         if is_lite and index_type.lower() != "flat":
             raise ValueError("Milvus Lite backend currently supports only 'flat' index")
 
@@ -412,8 +447,6 @@ class SciNCLIngestion:
             embeddings
         ):
             raise ValueError("Mismatch between embeddings and stored chunk metadata")
-
-        normalized_index_type = index_type.lower()
 
         if is_lite:
             db_dir = os.path.dirname(db_path)
@@ -429,7 +462,7 @@ class SciNCLIngestion:
         index_params = self.client.prepare_index_params()
         self._resolve_index_params(
             index_params,
-            index_type=normalized_index_type,
+            index_type=index_type,
             total_vectors=len(embeddings),
             is_lite=is_lite,
         )
@@ -480,7 +513,7 @@ class SciNCLIngestion:
             return 0
         try:
             stats = self.client.get_collection_stats(self.collection_name)
-            return int(stats.get("row_count", 0))
+            return int(stats["row_count"])
         except Exception as exc:
             logger.warning(f"Could not fetch collection stats: {exc}")
             return 0
@@ -505,7 +538,7 @@ class SciNCLIngestion:
         raise ValueError(f"Unsupported index type: {index_type}")
 
     @staticmethod
-    def is_lite_uri(uri: str | None) -> bool:
+    def is_lite_uri(uri: str | None):
         return uri is not None and uri.endswith(".db")
 
     def _resolve_index_params(
@@ -542,6 +575,8 @@ class SciNCLIngestion:
         else:
             raise ValueError(f"Unsupported index type: {index_type}")
 
+        logger.info(f"Creating {params['index_type']} index")
+
         index_params.add_index(**params)
 
     def _get_index_from_collection(self):
@@ -554,7 +589,7 @@ class SciNCLIngestion:
             return "flat"
         return str(index_info["index_type"])
 
-    def _make_client(self, db_path: str | None) -> MilvusClient:
+    def _make_client(self, db_path: str | None):
         """Create a MilvusClient, defaulting to localhost when no path/URI is provided."""
         return MilvusClient(uri=db_path) if db_path else MilvusClient()
 
@@ -663,10 +698,9 @@ class SciNCLRetrieval:
             outputs = self.ingestion.base_model(**inputs)
             query_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
-        # Search for extra chunks to increase odds of k unique documents
-        oversample_factor = n_vectors / max(len(self.documents), 1)
-        target = int(np.ceil(k * max(oversample_factor, 1.0)))
-        search_k = min(max(target, k), n_vectors)
+        avg_chunks_per_doc = n_vectors / max(len(self.documents), 1)
+        search_k = int(np.ceil(k * max(avg_chunks_per_doc, 1.0)))
+        search_k = min(max(search_k, k), n_vectors)
 
         search_start = time.perf_counter()
         search_results = self.ingestion.client.search(
@@ -683,85 +717,71 @@ class SciNCLRetrieval:
         if not search_results or not search_results[0]:
             return []
 
-        search_result = search_results[0]
-        if len(search_result) == 1:
-            hit = search_result[0]
-            entity = hit.get("entity", {})
-            doc_id = entity.get("doc_id")
-            document = self.documents.get(doc_id)
-            if document is None:
-                logger.warning(f"Document ID {doc_id} not found in store; skipping")
-                return []
-            score = 1.0 - (hit.get("distance", 2.0) / 2.0)
-            return [
-                RetrievalChunk(
-                    document=document,
-                    score=score,
-                    chunk_text=entity.get("chunk_text"),
-                )
-            ]
-
-        if self.reranker is None:
-            results = []
-            seen = set()
-            for hit in search_result:
-                entity = hit.get("entity", {})
-                doc_id = entity.get("doc_id")
-                if not doc_id or doc_id in seen:
-                    continue
-                doc = self.documents.get(doc_id)
-                if doc is None:
-                    logger.warning(f"Document ID {doc_id} not found in store; skipping")
-                    continue
-                score = 1.0 - (hit.get("distance", 2.0) / 2.0)
-                results.append(
-                    RetrievalChunk(
-                        document=doc,
-                        score=score,
-                        chunk_text=entity.get("chunk_text"),
-                    )
-                )
-                seen.add(doc_id)
-                if len(results) >= k:
-                    break
-            return results
-
-        return self._rerank_results(query, search_result, k)
-
-    def _rerank_results(self, query: str, search_result: list[dict], k: int):
-        doc_chunk_hits = {}
-        chunk_to_doc = {}
-        for hit in search_result:
-            entity = hit.get("entity", {})
-            doc_id, chunk_text = entity.get("doc_id"), entity.get("chunk_text")
-            if not doc_id or not chunk_text:
-                logger.warning(
-                    "Missing doc_id or chunk_text in search result; skipping"
-                )
-                continue
-            doc_chunk_hits.setdefault(doc_id, chunk_text)
-            chunk_to_doc.setdefault(chunk_text, doc_id)
-
-        if not doc_chunk_hits:
+        aggregated_hits = self._aggregate_hits(search_results[0])
+        if not aggregated_hits:
             return []
 
+        if self.reranker is None:
+            return self._top_k_without_rerank(aggregated_hits, k)
+
+        return self._rerank_results(query, aggregated_hits, k)
+
+    def _aggregate_hits(self, hits: list[dict]):
+        """
+        Merge multiple chunk hits per document into a single entry.
+        For each doc_id, keep the first score and concatenate the body texts.
+        """
+        per_doc = {}
+        for hit in hits:
+            entity = hit["entity"]
+            doc_id = entity["doc_id"]
+            if not doc_id or doc_id not in self.documents:
+                continue
+
+            chunk_text = entity["chunk_text"]
+            score = 1.0 - (hit["distance"] / 2.0)
+
+            doc_entry = per_doc.setdefault(doc_id, {"score": float(score), "texts": []})
+            doc_entry["texts"].append(chunk_text)
+
+        sep_token = self.ingestion.tokenizer.sep_token or "[SEP]"
+        aggregated = []
+        for doc_id, data in per_doc.items():
+            texts = [t for t in data["texts"] if t]
+            bodies = [t.split(sep_token, 1)[1].strip() for t in texts]
+            merged_abstract = " ".join(bodies).strip()
+            doc_title = self.documents[doc_id].title
+            merged_text = f"{doc_title}: {merged_abstract}"
+            aggregated.append((doc_id, data["score"], merged_text))
+
+        return aggregated
+
+    def _top_k_without_rerank(self, aggregated_hits, k: int):
+        return [
+            RetrievalChunk(
+                document=self.documents[doc_id], score=score, chunk_text=chunk_text
+            )
+            for doc_id, score, chunk_text in aggregated_hits[:k]
+            if doc_id in self.documents
+        ]
+
+    def _rerank_results(self, query: str, aggregated_hits: list[tuple], k: int):
+        chunk_texts = [chunk_text for _, _, chunk_text in aggregated_hits if chunk_text]
+
+        if not chunk_texts:
+            return self._top_k_without_rerank(aggregated_hits, k)
+
+        chunk_to_doc = {chunk_text: doc_id for doc_id, _, chunk_text in aggregated_hits}
+
         rerank_start = time.perf_counter()
-        rerank_results = self.reranker(query, list(doc_chunk_hits.values()))
+        rerank_results = self.reranker(query, chunk_texts, top_k=k)
         rerank_end = time.perf_counter()
-        logger.info(f"Rerank time: {rerank_end - rerank_start:.2f} seconds")
+        logger.notice(f"Rerank time: {rerank_end - rerank_start:.2f} seconds")
 
         results = []
-        seen = set()
         for result in rerank_results:
-            if len(results) >= k:
-                break
-            doc_id = chunk_to_doc.get(result.text)
-            if not doc_id or doc_id in seen:
-                continue
-            doc = self.documents.get(doc_id)
-            if doc is None:
-                logger.warning(f"Document ID {doc_id} not found in store; skipping")
-                continue
+            doc_id = chunk_to_doc[result.text]
+            doc = self.documents[doc_id]
             results.append(
                 RetrievalChunk(
                     document=doc,
@@ -769,6 +789,5 @@ class SciNCLRetrieval:
                     chunk_text=result.text,
                 )
             )
-            seen.add(doc_id)
 
         return results

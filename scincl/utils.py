@@ -101,8 +101,6 @@ def create_artifacts(
     Returns:
         Tuple of (retrieval, documents)
     """
-    index_type = "flat" if use_v1 else "ivf"
-
     print("Creating new artifacts...")
 
     if not _check_data_availability():
@@ -131,7 +129,7 @@ def create_artifacts(
     print(f"Total documents (before deduplication): {len(all_documents)}")
 
     seen_titles = set()
-    deduped_documents: dict[str, Document] = {}
+    deduped_documents = {}
     for doc_id, doc in all_documents.items():
         if doc.title not in seen_titles:
             deduped_documents[doc_id] = doc
@@ -147,7 +145,6 @@ def create_artifacts(
     os.makedirs(artifacts_dir, exist_ok=True)
     ingestion.create_index(
         embeddings,
-        index_type=index_type,
         db_path=os.path.join(artifacts_dir, "milvus.db") if use_v1 else None,
     )
 
