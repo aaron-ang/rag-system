@@ -3,6 +3,7 @@ Unified evaluation script for all RAG backends.
 Supports SciNCL+Milvus (server IVF / v1 Lite FLAT), Qdrant+SentenceTransformer, and Qdrant+TF-IDF.
 """
 
+import os
 import sys
 import argparse
 from dataclasses import dataclass
@@ -10,13 +11,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from deepeval import evaluate
-from deepeval.evaluate.configs import CacheConfig, DisplayConfig
-from deepeval.metrics import (
-    AnswerRelevancyMetric,
-    ContextualRelevancyMetric,
-    FaithfulnessMetric,
-)
-from deepeval.models import AmazonBedrockModel
+from deepeval.evaluate.configs import CacheConfig
+from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
+from deepeval.models import GPTModel
 from deepeval.test_case import LLMTestCase
 from deepeval.evaluate.types import EvaluationResult
 from sklearn.metrics import ndcg_score
@@ -204,18 +201,20 @@ def _summarize_deepeval(result: EvaluationResult):
 
 def run_deepeval_judge(
     results: list[QueryEvaluationResult],
-    bedrock_model_id: str,
-    bedrock_region: str,
+    model: str = "gpt-5-mini",
 ):
-    """Run deepeval metrics with Amazon Bedrock as the judge."""
+    """Run deepeval metrics with LLM as the judge."""
     if not results:
         print("LLM Judge: no evaluation data to score.")
         return
 
-    judge = AmazonBedrockModel(model_id=bedrock_model_id, region_name=bedrock_region)
+    # Allow longer time budgets for judge LLM calls (5 minutes)
+    os.environ.setdefault("DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE", "300")
+    os.environ.setdefault("DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE", "300")
 
-    display_config = DisplayConfig(show_indicator=False, print_results=False)
-    cache_config = CacheConfig(write_cache=False, use_cache=False)
+    judge = GPTModel(model=model, temperature=0)
+
+    cache_config = CacheConfig(use_cache=True)
 
     context_cases = [
         LLMTestCase(
@@ -228,23 +227,6 @@ def run_deepeval_judge(
         if result.contexts
     ]
 
-    if context_cases:
-        contextual_metric = ContextualRelevancyMetric(model=judge)
-        contextual_eval = evaluate(
-            context_cases,
-            [contextual_metric],
-            display_config=display_config,
-            cache_config=cache_config,
-        )
-        contextual_summary = _summarize_deepeval(contextual_eval)
-        if contextual_summary:
-            print("LLM Judge - Retrieval Context Quality")
-            for name, score in contextual_summary.items():
-                print(f"{name}: {score}")
-            print("-" * 60)
-    else:
-        print("LLM Judge: no retrieval contexts available for scoring.")
-
     answer_cases = [
         case
         for case in context_cases
@@ -255,17 +237,7 @@ def run_deepeval_judge(
             AnswerRelevancyMetric(model=judge),
             FaithfulnessMetric(model=judge),
         ]
-        answer_eval = evaluate(
-            answer_cases,
-            answer_metrics,
-            display_config=display_config,
-            cache_config=cache_config,
-        )
-        answer_summary = _summarize_deepeval(answer_eval)
-        if answer_summary:
-            print("LLM Judge - Answer Quality")
-            for name, score in answer_summary.items():
-                print(f"{name}: {score}")
+        evaluate(answer_cases, answer_metrics, cache_config=cache_config)
     elif context_cases:
         print("LLM Judge: no generated answers to evaluate for answer metrics.")
 
@@ -486,7 +458,7 @@ def main():
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Enable Bedrock-powered query rewrite/answer generation for SciNCL backend.",
+        help="Enable LLM-powered query rewrite/answer generation for SciNCL backend.",
     )
     parser.add_argument(
         "-k", type=int, default=10, help="Number of documents to retrieve (default: 10)"
@@ -500,9 +472,9 @@ def main():
         print(
             "EVALUATING: SciNCL + Milvus "
             + (
-                "Lite (v1, FLAT, full-document embeddings)"
+                "V1 (Lite, full-document embeddings)"
                 if use_v1
-                else "Server (IVF, sliding-window)"
+                else "V2 (Server, sliding-window)"
             )
             + " Backend"
         )

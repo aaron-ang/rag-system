@@ -167,7 +167,7 @@ def main():
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Enable LLM-assisted rewrite/answering (requires Bedrock env vars)",
+        help="Enable LLM-assisted rewrite/answering",
     )
     args = parser.parse_args()
 

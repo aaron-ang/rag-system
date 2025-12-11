@@ -11,9 +11,13 @@ wheels/
 
 # Data
 data/*_artifacts/
+data/llm_cache.json
 
 # Milvus
 volumes/
 
 # Secrets
 *.env
+
+# Deepeval
+.deepeval/

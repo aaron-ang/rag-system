@@ -8,14 +8,15 @@ import logging
 import os
 import re
 import time
+import hashlib
 from dataclasses import dataclass, asdict
 
-import boto3
 import coloredlogs
 import torch
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
+from openai import OpenAI
 from pymilvus import MilvusClient
 from pymilvus.model.reranker import BGERerankFunction
 from pymilvus.milvus_client.index import IndexParams
@@ -70,83 +71,104 @@ class Document:
         return cls(**data)
 
 
-class BedrockLLMAssistant:
-    """LLM utility for query rewrite and answer generation via Amazon Bedrock."""
+class LLMAssistant:
+    """LLM utility for query rewrite and answer generation."""
 
     def __init__(
         self,
-        model_id: str = "amazon.titan-text-express-v1",
-        region: str = "us-west-2",
-        temperature: float = 0.2,
-        max_tokens: int = 8192,
+        model_id: str = "gpt-5-nano",
+        cache_path: str = "data/llm_cache.json",
     ):
         self.model_id = model_id
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.client = boto3.client("bedrock-runtime", region_name=region)
+        self.client = OpenAI()
+        self.cache_path = cache_path
+        self._cache = self._load_cache()
 
     def rewrite_query(self, query: str):
         """Rewrite the user query into a concise search query."""
-        prompt = (
-            "Rewrite the following user query into a concise search query for scientific literature. "
-            "Preserve core intent and key entities. Return only the rewritten query text."
-            f"\n\nUser query:\n{query}"
-        )
+        cache_key = f"rewrite::{query.strip()}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
 
-        request = json.dumps(
-            {
-                "inputText": prompt,
-                "textGenerationConfig": {
-                    "temperature": self.temperature,
-                    "maxTokenCount": self.max_tokens,
-                },
-            }
+        system = (
+            "Rewrite the following user query into a concise search phrase for scientific literature. "
+            "Example rewritten query: risk factors for hypoxaemia in pediatric pneumonia and its prevalence. "
+            "Return only the rewritten query text."
         )
+        prompt = f"User query: {query}\n\nRewritten query: "
 
         try:
-            response = self.client.invoke_model(modelId=self.model_id, body=request)
-            model_response = json.loads(response["body"].read())
-            return str(model_response["results"][0]["outputText"])
+            result = self._chat_completion(system, prompt)
+            self._cache[cache_key] = result
+            self._save_cache()
+            return result
         except Exception as exc:
             logger.warning(
-                f"Bedrock query rewrite failed; falling back to original query: {exc}"
+                f"LLM query rewrite failed; falling back to original query: {exc}"
             )
             return query
 
     def generate_answer(self, query: str, contexts: list[str]):
         """Generate an answer using retrieved context."""
+        key_payload = {
+            "q": query.strip(),
+            "contexts": contexts,
+        }
+        digest = hashlib.sha256(
+            json.dumps(key_payload, sort_keys=True).encode()
+        ).hexdigest()
+        cache_key = f"answer::{digest}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
         context_block = (
             "\n\n".join([f"- {c}" for c in contexts if c and c.strip()])
             or "No additional context provided."
         )
 
-        prompt = (
-            "You are a concise assistant for scientific literature.\n"
-            "Given a user query and retrieved passages, "
-            "produce a short, directly answer or summarize relevant findings.\n"
-            "If the context is insufficient, say so briefly.\n\n"
-            f"Query: {query}\n"
-            f"Context:\n{context_block}\n\n"
-            "Answer:"
+        system = (
+            "You are a concise assistant for scientific literature. "
+            "Given a user query and retrieved context, "
+            "produce a concise answer in a single paragraph that summarizes the relevant findings. "
+            "If the context is insufficient, say so briefly."
         )
-
-        request = json.dumps(
-            {
-                "inputText": prompt,
-                "textGenerationConfig": {
-                    "temperature": self.temperature,
-                    "maxTokenCount": self.max_tokens,
-                },
-            }
-        )
+        prompt = f"Query: {query}\nContext: {context_block}\n\nAnswer: "
 
         try:
-            response = self.client.invoke_model(modelId=self.model_id, body=request)
-            model_response = json.loads(response["body"].read())
-            return str(model_response["results"][0]["outputText"])
+            result = self._chat_completion(system, prompt)
+            self._cache[cache_key] = result
+            self._save_cache()
+            return result
         except Exception as exc:
-            logger.warning(f"Bedrock answer generation failed: {exc}")
+            logger.warning(f"LLM answer generation failed: {exc}")
             return ""
+
+    def _chat_completion(self, system: str, prompt: str) -> str:
+        response = self.client.responses.create(
+            model=self.model_id,
+            instructions=system,
+            input=prompt,
+        )
+        return response.output_text.strip()
+
+    def _load_cache(self) -> dict:
+        try:
+            if self.cache_path and os.path.exists(self.cache_path):
+                with open(self.cache_path, "r") as f:
+                    return json.load(f)
+        except Exception as exc:
+            logger.warning(f"Failed to load LLM cache: {exc}")
+        return {}
+
+    def _save_cache(self):
+        if not self.cache_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.cache_path), exist_ok=True)
+            with open(self.cache_path, "w") as f:
+                json.dump(self._cache, f, indent=2)
+        except Exception as exc:
+            logger.warning(f"Failed to save LLM cache: {exc}")
 
 
 class SciNCLIngestion:
@@ -635,7 +657,7 @@ class SciNCLRetrieval:
             if not self.ingestion.use_v1
             else None
         )
-        self.llm_assistant = BedrockLLMAssistant() if enable_llm else None
+        self.llm_assistant = LLMAssistant() if enable_llm else None
 
     def retrieve(self, query: str, k: int):
         """
@@ -652,10 +674,12 @@ class SciNCLRetrieval:
         if k <= 0:
             raise ValueError("k must be positive")
 
+        original_query = query
         if self.llm_assistant:
             rewrite_start = time.perf_counter()
             query = self.llm_assistant.rewrite_query(query)
             rewrite_end = time.perf_counter()
+            logger.notice(f"Rewritten query: {query}")
             logger.notice(f"Rewrite time: {rewrite_end - rewrite_start:.2f} seconds")
 
         retrieval_chunks = self._search_and_rerank(query, k)
@@ -666,8 +690,9 @@ class SciNCLRetrieval:
                 chunk.chunk_text for chunk in retrieval_chunks if chunk.chunk_text
             ]
             generate_start = time.perf_counter()
-            llm_answer = self.llm_assistant.generate_answer(query, contexts)
+            llm_answer = self.llm_assistant.generate_answer(original_query, contexts)
             generate_end = time.perf_counter()
+            logger.notice(f"LLM answer: {llm_answer}")
             logger.notice(f"Generate time: {generate_end - generate_start:.2f} seconds")
 
         return RetrievalResult(retrieval_chunks=retrieval_chunks, llm_answer=llm_answer)

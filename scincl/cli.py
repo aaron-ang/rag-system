@@ -104,7 +104,7 @@ def main():
     query_parser.add_argument(
         "--llm",
         action="store_true",
-        help="Enable LLM-assisted rewrite/answering (requires Bedrock env vars)",
+        help="Enable LLM-assisted rewrite/answering",
     )
     query_parser.add_argument(
         "--k", type=int, default=5, help="Number of documents to retrieve"

@@ -108,7 +108,6 @@ if result.llm_answer:
 ### LLM Assist (optional)
 - Add `--llm` to CLI or main to enable LLM-assisted query rewrite and concise answers from retrieved context. If LLM is unavailable, the system falls back to the original query and skips the answer.
 - The `retrieve` method handles rewrite + answer generation automatically when LLM is enabled.
-- The LLM is currently set to Amazon Bedrock's Titan Text Express model.
 
 ## Data Sources
 
@@ -178,7 +177,7 @@ uv run -m eval.benchmark --llm
 
 **Metrics:** Recall@k, Precision@k, nDCG@k, MAP, MRR@k
 **Test Set:** 10 queries in `eval/queries_latest.csv`
-**LLM Judge (optional, SciNCL backend):** Contextual Relevancy, Answer Relevancy, Faithfulness via deepeval with an Amazon Bedrock model (requires AWS credentials). The `--llm` flag enables Bedrock-generated answers needed for answer-level scoring.
+**LLM Judge (optional, SciNCL backend):** Contextual Relevancy, Answer Relevancy, Faithfulness via deepeval. The `--llm` flag enables LLM-generated answers needed for answer-level scoring.
 
 ## Alternative Backend: Qdrant
 
@@ -198,7 +197,7 @@ python -m qdrant.cli
 
 **When to use:**
 - **SciNCL + Milvus Lite (v1)**: Local/dev, fast setup, flat index
-- **SciNCL + Milvus Server (v2 default)**: Larger corpora; IVF index; requires Milvus server at `http://localhost:19530`
+- **SciNCL + Milvus Server (v2 default)**: Requires Milvus server at `http://localhost:19530`
 - **Qdrant+ST**: Production, persistent storage, scalable
 - **Qdrant+TF-IDF**: Baselines, prototyping, CPU-only
 
