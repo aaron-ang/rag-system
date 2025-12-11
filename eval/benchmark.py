@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from deepeval import evaluate
-from deepeval.evaluate.configs import CacheConfig
+from deepeval.evaluate.configs import CacheConfig, DisplayConfig
 from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
 from deepeval.models import GPTModel
 from deepeval.test_case import LLMTestCase
@@ -214,6 +214,7 @@ def run_deepeval_judge(
 
     judge = GPTModel(model=model, temperature=0)
 
+    display_config = DisplayConfig(print_results=False)
     cache_config = CacheConfig(use_cache=True)
 
     context_cases = [
@@ -237,7 +238,12 @@ def run_deepeval_judge(
             AnswerRelevancyMetric(model=judge),
             FaithfulnessMetric(model=judge),
         ]
-        evaluate(answer_cases, answer_metrics, cache_config=cache_config)
+        evaluate(
+            answer_cases,
+            answer_metrics,
+            cache_config=cache_config,
+            display_config=display_config,
+        )
     elif context_cases:
         print("LLM Judge: no generated answers to evaluate for answer metrics.")
 
