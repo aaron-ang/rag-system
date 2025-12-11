@@ -171,10 +171,14 @@ uv run -m eval.benchmark --v1
 
 # Specific backend: scincl | qdrant_st | qdrant_tfidf | all
 uv run -m eval.benchmark --backend all -k 10
+
+# Add LLM judge (SciNCL only): Deepeval metrics
+uv run -m eval.benchmark --llm
 ```
 
 **Metrics:** Recall@k, Precision@k, nDCG@k, MAP, MRR@k
 **Test Set:** 10 queries in `eval/queries_latest.csv`
+**LLM Judge (optional, SciNCL backend):** Contextual Relevancy, Answer Relevancy, Faithfulness via deepeval with an Amazon Bedrock model (requires AWS credentials). The `--llm` flag enables Bedrock-generated answers needed for answer-level scoring.
 
 ## Alternative Backend: Qdrant
 

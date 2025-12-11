@@ -3,13 +3,38 @@ Unified evaluation script for all RAG backends.
 Supports SciNCL+Milvus (server IVF / v1 Lite FLAT), Qdrant+SentenceTransformer, and Qdrant+TF-IDF.
 """
 
+import sys
 import argparse
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
+from deepeval import evaluate
+from deepeval.evaluate.configs import CacheConfig, DisplayConfig
+from deepeval.metrics import (
+    AnswerRelevancyMetric,
+    ContextualRelevancyMetric,
+    FaithfulnessMetric,
+)
+from deepeval.models import AmazonBedrockModel
+from deepeval.test_case import LLMTestCase
+from deepeval.evaluate.types import EvaluationResult
 from sklearn.metrics import ndcg_score
-import sys
 
+from qdrant.tfidf import TfidfRAG
+from qdrant.sentence_transformer import SentenceTransformerRAG
 from scincl import SciNCLRetrieval, load_or_create_artifacts
+
+
+@dataclass
+class QueryEvaluationResult:
+    query_id: str | int
+    query_text: str
+    ground_truth_ids: set[str]
+    retrieved_ids: list[str]
+    retrieved_scores: list[float]
+    contexts: list[str]
+    llm_answer: str | None = None
 
 
 def recall_at_k(
@@ -114,16 +139,149 @@ def mrr_at_k(
     return round(sum(reciprocal_ranks) / len(reciprocal_ranks), 3)
 
 
-def evaluate_retriever(retrieval: SciNCLRetrieval, k=10, use_v1=False):
+def _metric_inputs(results: list[QueryEvaluationResult]):
+    retrieved_docs = [result.retrieved_ids for result in results]
+    ground_truth_docs = [result.ground_truth_ids for result in results]
+    retrieved_scores = [result.retrieved_scores for result in results]
+    return retrieved_docs, ground_truth_docs, retrieved_scores
+
+
+def print_retrieval_metrics(
+    results: list[QueryEvaluationResult], include_mrr: bool = False
+):
+    if not results:
+        print("No evaluation data collected; skipping metric computation.")
+        return
+
+    retrieved_docs, ground_truth_docs, retrieved_scores = _metric_inputs(results)
+
+    print("Recall@3:", recall_at_k(retrieved_docs, ground_truth_docs, 3))
+    print("Recall@5:", recall_at_k(retrieved_docs, ground_truth_docs, 5))
+    print("Recall@10:", recall_at_k(retrieved_docs, ground_truth_docs, 10))
+    print("-" * 60)
+
+    print("Precision@3:", precision_at_k(retrieved_docs, ground_truth_docs, 3))
+    print("Precision@5:", precision_at_k(retrieved_docs, ground_truth_docs, 5))
+    print("Precision@10:", precision_at_k(retrieved_docs, ground_truth_docs, 10))
+    print("-" * 60)
+
+    print("nDCG@3:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 3))
+    print("nDCG@5:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 5))
+    print(
+        "nDCG@10:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 10)
+    )
+    print("-" * 60)
+
+    if include_mrr:
+        print("MRR@3:", mrr_at_k(retrieved_docs, ground_truth_docs, 3))
+        print("MRR@5:", mrr_at_k(retrieved_docs, ground_truth_docs, 5))
+        print("MRR@10:", mrr_at_k(retrieved_docs, ground_truth_docs, 10))
+        print("-" * 60)
+
+    print(
+        "Mean Average Precision (MAP):",
+        mean_average_precision(retrieved_docs, ground_truth_docs),
+    )
+
+
+def _summarize_deepeval(result: EvaluationResult):
+    """Aggregate deepeval scores across test cases by metric name."""
+    aggregated = {}
+    for test_result in result.test_results:
+        if not test_result.metrics_data:
+            continue
+        for metric_data in test_result.metrics_data:
+            if metric_data.score is None:
+                continue
+            aggregated.setdefault(metric_data.name, []).append(metric_data.score)
+
+    return {
+        name: round(float(np.mean(scores)), 3)
+        for name, scores in aggregated.items()
+        if scores
+    }
+
+
+def run_deepeval_judge(
+    results: list[QueryEvaluationResult],
+    bedrock_model_id: str,
+    bedrock_region: str,
+):
+    """Run deepeval metrics with Amazon Bedrock as the judge."""
+    if not results:
+        print("LLM Judge: no evaluation data to score.")
+        return
+
+    judge = AmazonBedrockModel(model_id=bedrock_model_id, region_name=bedrock_region)
+
+    display_config = DisplayConfig(show_indicator=False, print_results=False)
+    cache_config = CacheConfig(write_cache=False, use_cache=False)
+
+    context_cases = [
+        LLMTestCase(
+            input=result.query_text,
+            actual_output=result.llm_answer or "",
+            retrieval_context=result.contexts,
+            name=f"Query {result.query_id}",
+        )
+        for result in results
+        if result.contexts
+    ]
+
+    if context_cases:
+        contextual_metric = ContextualRelevancyMetric(model=judge)
+        contextual_eval = evaluate(
+            context_cases,
+            [contextual_metric],
+            display_config=display_config,
+            cache_config=cache_config,
+        )
+        contextual_summary = _summarize_deepeval(contextual_eval)
+        if contextual_summary:
+            print("LLM Judge - Retrieval Context Quality")
+            for name, score in contextual_summary.items():
+                print(f"{name}: {score}")
+            print("-" * 60)
+    else:
+        print("LLM Judge: no retrieval contexts available for scoring.")
+
+    answer_cases = [
+        case
+        for case in context_cases
+        if case.actual_output and case.actual_output.strip()
+    ]
+    if answer_cases:
+        answer_metrics = [
+            AnswerRelevancyMetric(model=judge),
+            FaithfulnessMetric(model=judge),
+        ]
+        answer_eval = evaluate(
+            answer_cases,
+            answer_metrics,
+            display_config=display_config,
+            cache_config=cache_config,
+        )
+        answer_summary = _summarize_deepeval(answer_eval)
+        if answer_summary:
+            print("LLM Judge - Answer Quality")
+            for name, score in answer_summary.items():
+                print(f"{name}: {score}")
+    elif context_cases:
+        print("LLM Judge: no generated answers to evaluate for answer metrics.")
+
+
+def evaluate_retriever(
+    retrieval: SciNCLRetrieval,
+    k=10,
+    use_v1=False,
+    enable_llm_judge: bool = False,
+):
     """
     Evaluates the retrieval system on a test set of queries.
     """
+    query_results: list[QueryEvaluationResult] = []
     queries_file = "eval/queries_v1.csv" if use_v1 else "eval/queries_latest.csv"
     df = pd.read_csv(queries_file)
-
-    retrieved_docs = []
-    retrieved_scores = []
-    ground_truth_docs = []
 
     print("\n" + "=" * 60)
     print("SciNCL RAG System - Test Set Evaluation")
@@ -142,60 +300,67 @@ def evaluate_retriever(retrieval: SciNCLRetrieval, k=10, use_v1=False):
             chunks = retrieval_result.retrieval_chunks
             if chunks:
                 retrieved_ids = [result.document.id for result in chunks]
-                retrieved_scores = [result.score for result in chunks]
+                scores = [result.score for result in chunks]
+                contexts = [
+                    ctx
+                    for ctx in (
+                        chunk.chunk_text or chunk.document.abstract for chunk in chunks
+                    )
+                    if ctx
+                ]
             else:
                 retrieved_ids = []
-                retrieved_scores = []
+                scores = []
+                contexts = []
                 print("❌ No results found.")
 
-            retrieved_docs.append(retrieved_ids)
-            retrieved_scores.append(retrieved_scores)
-            ground_truth_docs.append(gt_doc_ids)
+            query_results.append(
+                QueryEvaluationResult(
+                    query_id=query_id,
+                    query_text=query,
+                    ground_truth_ids=gt_doc_ids,
+                    retrieved_ids=retrieved_ids,
+                    retrieved_scores=scores,
+                    contexts=contexts,
+                    llm_answer=retrieval_result.llm_answer,
+                )
+            )
 
         except Exception as e:
             print(f"❌ Error processing query '{query}': {e}")
-            retrieved_docs.append([])
-            retrieved_scores.append([])
-            ground_truth_docs.append(gt_doc_ids)
+            query_results.append(
+                QueryEvaluationResult(
+                    query_id=query_id,
+                    query_text=query,
+                    ground_truth_ids=gt_doc_ids,
+                    retrieved_ids=[],
+                    retrieved_scores=[],
+                    contexts=[],
+                )
+            )
 
     print("\n" + "=" * 60)
     print("✅ Retrieval completed.")
     print("=" * 60)
 
-    print("Recall@3:", recall_at_k(retrieved_docs, ground_truth_docs, 3))
-    print("Recall@5:", recall_at_k(retrieved_docs, ground_truth_docs, 5))
-    print("Recall@10:", recall_at_k(retrieved_docs, ground_truth_docs, 10))
-    print("-" * 60)
-
-    print("Precision@3:", precision_at_k(retrieved_docs, ground_truth_docs, 3))
-    print("Precision@5:", precision_at_k(retrieved_docs, ground_truth_docs, 5))
-    print("Precision@10:", precision_at_k(retrieved_docs, ground_truth_docs, 10))
-    print("-" * 60)
-
-    print("nDCG@3:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 3))
-    print("nDCG@5:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 5))
-    print(
-        "nDCG@10:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 10)
-    )
-    print("-" * 60)
-
-    print(
-        "Mean Average Precision (MAP):",
-        mean_average_precision(retrieved_docs, ground_truth_docs),
-    )
-    print("-" * 60)
+    print_retrieval_metrics(query_results)
+    if enable_llm_judge:
+        print("-" * 60)
+        run_deepeval_judge(query_results)
 
 
-def evaluate_qdrant_backend(rag_system, backend_name: str, k=10):
+def evaluate_qdrant_backend(
+    rag_system: SentenceTransformerRAG | TfidfRAG,
+    backend_name: str,
+    k=10,
+):
     """
     Evaluates the Qdrant-based RAG system on a test set of queries.
     Supports both SentenceTransformer and TF-IDF backends.
     """
     df = pd.read_csv("eval/queries_latest.csv")
 
-    retrieved_docs = []
-    retrieved_scores = []
-    ground_truth_docs = []
+    query_results = []
 
     print("\n" + "=" * 60)
     print(f"Qdrant ({backend_name}) RAG System - Test Set Evaluation")
@@ -213,10 +378,11 @@ def evaluate_qdrant_backend(rag_system, backend_name: str, k=10):
             # Use the RAG system's query method
             result = rag_system.query(query, limit=k, generate_answer=False)
 
-            if result and result["documents"]:
+            if result and result.get("documents"):
                 # Extract SemanticScholar paper IDs from the retrieved documents
                 retrieved_paper_ids = []
                 retrieved_sim_scores = []
+                contexts = []
 
                 print(f"📄 Retrieved {len(result['documents'])} documents")
                 for i, doc in enumerate(result["documents"][:3], 1):
@@ -229,6 +395,9 @@ def evaluate_qdrant_backend(rag_system, backend_name: str, k=10):
                     if paper_id:
                         retrieved_paper_ids.append(paper_id)
                         retrieved_sim_scores.append(doc["score"])
+                    context_text = doc.get("text") or doc.get("abstract")
+                    if context_text:
+                        contexts.append(context_text)
                     else:
                         # For PubMed documents or documents without paper_id
                         # We can't match them against SemanticScholar IDs
@@ -236,20 +405,38 @@ def evaluate_qdrant_backend(rag_system, backend_name: str, k=10):
             else:
                 retrieved_paper_ids = []
                 retrieved_sim_scores = []
+                contexts = []
                 print("❌ No results found.")
 
-            retrieved_docs.append(retrieved_paper_ids)
-            retrieved_scores.append(retrieved_sim_scores)
-            ground_truth_docs.append(gt_doc_ids)
+            query_results.append(
+                QueryEvaluationResult(
+                    query_id=query_id,
+                    query_text=query,
+                    ground_truth_ids=gt_doc_ids,
+                    retrieved_ids=retrieved_paper_ids,
+                    retrieved_scores=retrieved_sim_scores,
+                    contexts=contexts,
+                    llm_answer=result.get("answer")
+                    if isinstance(result, dict)
+                    else None,
+                )
+            )
 
         except Exception as e:
             print(f"❌ Error processing query '{query}': {e}")
             import traceback
 
             traceback.print_exc()
-            retrieved_docs.append([])
-            retrieved_scores.append([])
-            ground_truth_docs.append(gt_doc_ids)
+            query_results.append(
+                QueryEvaluationResult(
+                    query_id=query_id,
+                    query_text=query,
+                    ground_truth_ids=gt_doc_ids,
+                    retrieved_ids=[],
+                    retrieved_scores=[],
+                    contexts=[],
+                )
+            )
 
     print("\n" + "=" * 60)
     print("✅ Retrieval completed.")
@@ -259,46 +446,25 @@ def evaluate_qdrant_backend(rag_system, backend_name: str, k=10):
     print("\n📊 EVALUATION METRICS")
     print("=" * 60)
 
-    print("Recall@3:", recall_at_k(retrieved_docs, ground_truth_docs, 3))
-    print("Recall@5:", recall_at_k(retrieved_docs, ground_truth_docs, 5))
-    print("Recall@10:", recall_at_k(retrieved_docs, ground_truth_docs, 10))
-    print("-" * 60)
-
-    print("Precision@3:", precision_at_k(retrieved_docs, ground_truth_docs, 3))
-    print("Precision@5:", precision_at_k(retrieved_docs, ground_truth_docs, 5))
-    print("Precision@10:", precision_at_k(retrieved_docs, ground_truth_docs, 10))
-    print("-" * 60)
-
-    print("nDCG@3:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 3))
-    print("nDCG@5:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 5))
-    print(
-        "nDCG@10:", ndcg_at_k(retrieved_docs, ground_truth_docs, retrieved_scores, 10)
-    )
-    print("-" * 60)
-
-    print("MRR@3:", mrr_at_k(retrieved_docs, ground_truth_docs, 3))
-    print("MRR@5:", mrr_at_k(retrieved_docs, ground_truth_docs, 5))
-    print("MRR@10:", mrr_at_k(retrieved_docs, ground_truth_docs, 10))
-    print("-" * 60)
-
-    print(
-        "Mean Average Precision (MAP):",
-        mean_average_precision(retrieved_docs, ground_truth_docs),
-    )
+    print_retrieval_metrics(query_results, include_mrr=True)
     print("=" * 60)
 
     # Detailed per-query results
     print("\n📋 DETAILED PER-QUERY RESULTS")
     print("=" * 60)
-    for i, (retrieved, truth) in enumerate(zip(retrieved_docs, ground_truth_docs), 1):
-        hits = len(set(retrieved) & truth)
-        total_relevant = len(truth)
+    for i, result in enumerate(query_results, 1):
+        hits = len(set(result.retrieved_ids) & result.ground_truth_ids)
+        total_relevant = len(result.ground_truth_ids)
         print(f"Query {i}: {hits}/{total_relevant} relevant docs found")
         if hits > 0:
-            print(f"  Relevant docs found: {set(retrieved) & truth}")
-        elif retrieved:
-            print(f"  Retrieved IDs: {retrieved[:3]}... (showing first 3)")
-            print(f"  Ground truth IDs: {list(truth)[:3]}... (showing first 3)")
+            print(
+                f"  Relevant docs found: {set(result.retrieved_ids) & result.ground_truth_ids}"
+            )
+        elif result.retrieved_ids:
+            print(f"  Retrieved IDs: {result.retrieved_ids[:3]}... (showing first 3)")
+            print(
+                f"  Ground truth IDs: {list(result.ground_truth_ids)[:3]}... (showing first 3)"
+            )
 
 
 def main():
@@ -318,13 +484,18 @@ def main():
         help="Use v1 profile: Milvus Lite (local milvus.db) with FLAT index and full-document embeddings",
     )
     parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Enable Bedrock-powered query rewrite/answer generation for SciNCL backend.",
+    )
+    parser.add_argument(
         "-k", type=int, default=10, help="Number of documents to retrieve (default: 10)"
     )
 
     args = parser.parse_args()
-    use_v1 = args.v1
 
     if args.backend == "scincl" or args.backend == "all":
+        use_v1 = args.v1
         print("\n" + "=" * 80)
         print(
             "EVALUATING: SciNCL + Milvus "
@@ -337,8 +508,13 @@ def main():
         )
         print("=" * 80)
         try:
-            retrieval = load_or_create_artifacts(use_v1=use_v1)
-            evaluate_retriever(retrieval, k=args.k, use_v1=use_v1)
+            retrieval = load_or_create_artifacts(use_v1=use_v1, enable_llm=args.llm)
+            evaluate_retriever(
+                retrieval,
+                k=args.k,
+                use_v1=use_v1,
+                enable_llm_judge=args.llm,
+            )
         except Exception as e:
             print(f"❌ Failed to evaluate SciNCL backend: {e}")
             if args.backend == "scincl":
@@ -349,10 +525,9 @@ def main():
         print("EVALUATING: Qdrant + SentenceTransformer Backend")
         print("=" * 80)
         try:
-            from qdrant.sentence_transformer import SentenceTransformerRAG
-
-            rag = SentenceTransformerRAG()
-            evaluate_qdrant_backend(rag, "SentenceTransformer", k=args.k)
+            evaluate_qdrant_backend(
+                SentenceTransformerRAG(), "SentenceTransformer", k=args.k
+            )
         except ImportError as e:
             print(f"❌ Qdrant backend not available: {e}")
             print("Make sure Qdrant is installed and running.")
@@ -368,10 +543,7 @@ def main():
         print("EVALUATING: Qdrant + TF-IDF Backend")
         print("=" * 80)
         try:
-            from qdrant.tfidf import TfidfRAG
-
-            rag = TfidfRAG()
-            evaluate_qdrant_backend(rag, "TF-IDF", k=args.k)
+            evaluate_qdrant_backend(TfidfRAG(), "TF-IDF", k=args.k)
         except ImportError as e:
             print(f"❌ Qdrant backend not available: {e}")
             print("Make sure Qdrant is installed and running.")
