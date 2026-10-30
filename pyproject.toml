@@ -26,3 +26,12 @@ dependencies = [
     "botocore>=1.42.5",
     "boto3>=1.42.5",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
