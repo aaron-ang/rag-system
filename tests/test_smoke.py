@@ -20,7 +20,6 @@ PUBMED_CSV = Path(__file__).parents[1] / "data" / "pubmed_abstracts.csv"
         "scincl.cli",
         "eval.benchmark",
         # Transitive deps that Dependabot bumps independently.
-        "PIL.Image",
         "filelock",
         "milvus_lite",
         "FlagEmbedding",
