@@ -245,12 +245,12 @@ class SentenceTransformerRAG:
         search_filter = Filter(must=filter_conditions) if filter_conditions else None
 
         # Search
-        search_results = self.qdrant_client.search(
+        search_results = self.qdrant_client.query_points(
             collection_name=self.collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=limit,
             query_filter=search_filter,
-        )
+        ).points
 
         # Format results
         results = []
@@ -357,7 +357,7 @@ Please provide a comprehensive answer based on the research papers above. If the
             collection_info = self.qdrant_client.get_collection(self.collection_name)
             return {
                 "name": self.collection_name,
-                "vectors_count": collection_info.vectors_count,
+                "vectors_count": collection_info.points_count,
                 "status": collection_info.status,
                 "config": collection_info.config,
             }
